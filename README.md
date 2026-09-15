@@ -1,5 +1,24 @@
 # Drawing Atlas — upload-first AI directory
 
+## Ask about one sheet
+
+Choose **Ask drawings** in navigation and open a sheet, or open any drawing and
+select **Ask about this sheet** beside it. The assistant receives only that physical
+page's extracted text, full image and enlarged title-block strips. It cannot consult
+other sheets. Choose an image-capable OpenRouter model in AI settings.
+
+Each **Send question** makes a paid request. No request runs merely by opening chat.
+Source regions highlight matched text or AI-proposed visual areas. Missing or repeated
+text falls back to the full sheet. Conversations are separate per project and page,
+saved in browser storage, and listed below Ask drawings for the current project.
+Clearing browser data removes saved chats. Each answer shows reported input, output,
+total tokens and cost, with conversation totals. Missing usage is shown as unavailable. Recent conversation (up to 20 messages) accompanies
+follow-up questions. Failed requests retain your question for manual retry.
+
+The endpoint is `POST /api/projects/{id}/pages/{page}/chat`. Chat does not modify
+the directory or require completed directory generation. Answers can be mistaken;
+check cited notes on the source drawing, especially small dimensions or symbols.
+
 Run **start.bat**, then open http://127.0.0.1:8000. The first screen asks for a PDF. Nothing about the project's areas, room types, floors, disciplines or page layout is predefined.
 
 ## Use it
@@ -86,3 +105,30 @@ Tests cover arbitrary naming schemes, automatic upload-to-directory publication,
 OpenRouter structured-output documentation: https://openrouter.ai/docs/guides/features/structured-outputs
 
 PyMuPDF is distributed under AGPL/commercial licensing; choose the appropriate arrangement before distributing a commercial product.
+
+
+## Chat filters, storage and saved answers
+
+Chats, usage, reply filters and colors are saved in `data/<project-id>/chats.json`.
+Reusable responses are saved in `data/<project-id>/answers.json`. Existing browser
+chats are imported when the project has no disk conversation for that page.
+
+Use the reply checkboxes to select highlight groups and each color picker to change
+its color. Clear filters restores all groups. The scope above the question box shows
+which replies guide the next answer. Changing filters or colors makes no AI request.
+AI regions remain approximate; manual drawing, resizing and citation auto-zoom have
+been removed. Normal viewer zoom still works. The original PDF is unchanged.
+
+The server reuses an immediately repeated question only when PDF, page, conversation,
+model, normalized question, selected regions and preceding conversation match.
+Capitalization and extra whitespace are ignored; paraphrases are not matched.
+When earlier identical questions exist but scope, context or verification details differ,
+the app offers Use previous answer or Generate fresh without sending an AI request. Color changes alone do not invalidate
+reuse. Generate a fresh answer bypasses the cache. Reused replies show zero new
+usage; the original reply retains its generation usage. Save status shows whether
+changes reached the project. Filter controls are disabled while an answer or save
+is in progress. Restart the backend and refresh the browser after upgrading.
+
+Reused replies reference their original highlight group instead of creating new boxes.
+The viewer draws identical saved page regions once, while keeping distinct regions separate.
+Older replies without verification metadata require an explicit reuse choice.

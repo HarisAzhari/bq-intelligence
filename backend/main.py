@@ -358,4 +358,142 @@ def analyze(pid:str,page:int):
         save(p)
     return dict(suggestion=result.model_dump(),usage=payload.get('usage',{}))
 
+from backend.chat import Question, Turn, ask_sheet
+
+CHAT_ACTIVE = set()
+
+def highlight_owner(turns, index):
+    seen = set()
+    while 0 <= index < len(turns) and index not in seen:
+        seen.add(index)
+        ref = turns[index].get('highlight_ref')
+        if not isinstance(ref, int) or isinstance(ref, bool) or not 0 <= ref < index:
+            return index
+        index = ref
+    return index
+
+
+def normalized_question(value):
+    return ' '.join(value.split()).casefold()
+
+@app.post('/api/projects/{pid}/pages/{page}/chat')
+def chat(pid: str, page: int, body: Question):
+    p, s = sheet(pid, page)
+    if not body.question.strip(): raise HTTPException(400, 'Enter a question.')
+    identity = (pid, page)
+    with LOCK:
+        if identity in CHAT_ACTIVE: raise HTTPException(409, 'An answer is already being prepared for this sheet.')
+        CHAT_ACTIVE.add(identity)
+    try:
+        with LOCK:
+            saved = read_chats(pid)
+            state = saved.get(str(page), dict(turns=[]))
+            state.setdefault('conversation_id', uuid.uuid4().hex)
+            selected = state.get('selected')
+            if selected is not None: selected = sorted({highlight_owner(state['turns'], i) for i in selected if 0 <= i < len(state['turns'])})
+            scope = dict(mode='all') if selected is None else dict(mode='filtered', replies=[
+                dict(reply=i, sources=state['turns'][i].get('sources', []))
+                for i in sorted(set(selected)) if 0 <= i < len(state['turns']) and state['turns'][i].get('role') == 'assistant'])
+            history = [dict(role=t['role'], content=t['content']) for t in state['turns']]
+            # Only immediately repeated exchanges may be removed. Intervening context
+            # changes force a fresh request, including ambiguous follow-up questions.
+            while len(history) >= 2 and history[-1]['role'] == 'assistant' and history[-2]['role'] == 'user' and normalized_question(history[-2]['content']) == normalized_question(body.question):
+                history = history[:-2]
+            fingerprint = hashlib.sha256((folder(pid)/'source.pdf').read_bytes()).hexdigest()
+            context_key = hashlib.sha256(json.dumps(history, sort_keys=True).encode()).hexdigest()
+            cache_key = hashlib.sha256(json.dumps(dict(version=1, pdf=fingerprint, page=page,
+                conversation=state['conversation_id'], model=current_model(), question=normalized_question(body.question),
+                scope=scope, history=history), sort_keys=True).encode()).hexdigest()
+            cache_path = folder(pid)/'answers.json'
+            cache = json.loads(cache_path.read_text(encoding='utf8')) if cache_path.exists() else {}
+            hit = None
+            source_turn = None
+            candidates = [i for i in range(1, len(state['turns']))
+                if state['turns'][i].get('role') == 'assistant' and state['turns'][i-1].get('role') == 'user'
+                and normalized_question(state['turns'][i-1]['content']) == normalized_question(body.question)
+                and state['turns'][i].get('pdf_hash', fingerprint) == fingerprint]
+            if body.reuse_turn is not None and not body.fresh:
+                if body.reuse_turn not in candidates:
+                    raise HTTPException(409, 'That saved answer no longer matches this question and sheet.')
+                source_turn = body.reuse_turn
+            elif not body.fresh:
+                for i in reversed(candidates):
+                    t = state['turns'][i]
+                    if t.get('scope') == scope and t.get('context_key') == context_key and t.get('pdf_hash') == fingerprint and t.get('model') == current_model():
+                        source_turn = i
+                        break
+                if source_turn is None and candidates:
+                    i = candidates[-1]
+                    return dict(needs_choice=True, previous_turn=i, previous_answer=state['turns'][i]['content'],
+                        reason='A previous answer exists, but its scope, conversation context, model or saved verification details differ. No AI request was sent.')
+            if source_turn is not None:
+                previous = state['turns'][source_turn]
+                hit = dict(answer=previous['content'], sources=[],
+                    usage=previous.get('original_usage') if previous.get('cached') else previous.get('usage', {}))
+        if hit:
+            result = dict(hit, cached=True, original_usage=hit.get('usage', {}),
+                usage=dict(prompt_tokens=0, completion_tokens=0, total_tokens=0, cost=0))
+        else:
+            if not ready(): raise HTTPException(400, 'Add an OpenRouter key in AI settings first.')
+            request = body.model_copy(update={'scope':scope, 'history':[Turn(**t) for t in history[-20:]]})
+            result = ask_sheet(folder(pid)/'source.pdf', page, s['text'], request,
+                             os.environ['OPENROUTER_API_KEY'].strip(), current_model())
+            result['cached'] = False
+        with LOCK:
+            saved = read_chats(pid)
+            if not hit:
+                cache = json.loads(cache_path.read_text(encoding='utf8')) if cache_path.exists() else {}
+                cache[cache_key] = result
+                atomic(cache_path, cache)
+            state['turns'].extend([dict(role='user', content=body.question),
+                dict(role='assistant', content=result['answer'], sources=result.get('sources', []), usage=result.get('usage', {}),
+                     cached=result['cached'], original_usage=result.get('original_usage'),
+                     highlight_ref=highlight_owner(state['turns'], source_turn) if source_turn is not None else None,
+                     scope=state['turns'][source_turn].get('scope') if source_turn is not None else scope,
+                     context_key=state['turns'][source_turn].get('context_key') if source_turn is not None else context_key,
+                     pdf_hash=fingerprint, model=state['turns'][source_turn].get('model') if source_turn is not None else current_model())])
+            state['updated'] = int(time.time()*1000)
+            state['revision'] = state.get('revision', 0) + 1
+            saved[str(page)] = state
+            atomic(folder(pid)/'chats.json', saved)
+        result['conversation'] = state
+        return result
+    except PipelineError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    finally:
+        with LOCK: CHAT_ACTIVE.discard(identity)
+
+
+def read_chats(pid):
+    read(pid)
+    path = folder(pid)/'chats.json'
+    return json.loads(path.read_text(encoding='utf8')) if path.exists() else {}
+
+@app.get('/api/projects/{pid}/chats')
+def chats(pid: str):
+    with LOCK: return read_chats(pid)
+
+class SavedChat(BaseModel):
+    turns: list[dict] = Field(max_length=2000)
+    updated: int = 0
+    revision: int = 0
+    selected: list[int] | None = None
+    colors: dict[str, str] = Field(default_factory=dict)
+
+@app.put('/api/projects/{pid}/pages/{page}/conversation')
+def save_conversation(pid: str, page: int, body: SavedChat):
+    sheet(pid, page)
+    with LOCK:
+        if (pid, page) in CHAT_ACTIVE: raise HTTPException(409, 'Wait for the current answer before changing filters.')
+        saved = read_chats(pid)
+        old = saved.get(str(page), {})
+        if old.get('revision', 0) != body.revision:
+            raise HTTPException(409, 'Conversation changed. Reopen the project before saving again.')
+        value = body.model_dump()
+        value['conversation_id'] = old.get('conversation_id') or uuid.uuid4().hex
+        value['revision'] += 1
+        saved[str(page)] = value
+        atomic(folder(pid)/'chats.json', saved)
+        return value
+
 app.mount('/',StaticFiles(directory=ROOT/'frontend',html=True),name='frontend')

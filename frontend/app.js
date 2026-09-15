@@ -12,8 +12,9 @@ const areaSheets=id=>project.pages.filter(s=>linked(s,id));
 const pretty=t=>t.length>130?t.slice(0,127)+'…':t;
 const tag=t=>`<span class="tag">${esc(t)}</span>`;
 
-async function loadProject(id){project=await api(`/api/projects/${id}`);localStorage.setItem('atlas-project',id);$('#projectSelect').value=id;$('#exportLink').href=base()+'/export';route='overview';area=null;query='';level='';discipline='';viewType='';stageValue='';renderNav();render();}
+async function loadProject(id){project=await api(`/api/projects/${id}`);if(typeof loadSavedChats==='function')await loadSavedChats(id);localStorage.setItem('atlas-project',id);$('#projectSelect').value=id;$('#exportLink').href=base()+'/export';route='overview';area=null;query='';level='';discipline='';viewType='';stageValue='';renderNav();render();}
 function renderNav(){
+ if(typeof renderChatHistory==='function')renderChatHistory();
  document.querySelector('[data-nav=review]').hidden=true;$('#navCount').textContent=project.page_count;$('#reviewCount').textContent=project.pages.filter(review).length;$('#areaCount').textContent=project.areas.length;
  const wings=[...new Set(project.areas.map(a=>a.wing||'Detected areas'))];
  $('#areaNav').innerHTML=wings.map(w=>`<div class="wing-label">${esc(w)}</div>`+project.areas.filter(a=>(a.wing||'Detected areas')===w).map(a=>`<button class="area-link ${area===a.id?'active':''}" data-area="${esc(a.id)}"><span class="area-code">${esc(a.id)}</span>${esc(a.label||a.kind||a.id)}<small>${areaSheets(a.id).length}</small></button>`).join('')).join('');
@@ -52,7 +53,7 @@ function listBody(){
 }
 function render(){
  if(!project)return;
- $('#crumb').textContent=area||({overview:'Project overview',drawings:'All drawings',services:'Building services',review:'Review queue'}[route]);
+ $('#crumb').textContent=area||({overview:'Project overview',drawings:'All drawings',services:'Building services',review:'Review queue',chat:'Ask drawings'}[route]);
  if(route==='overview')$('#main').innerHTML=overview();
  else{
   let top='';
@@ -61,6 +62,7 @@ function render(){
    top=heading('PROJECT AREA',a.label||area,'Follow the work sequence, with shared typical drawings linked in context.')+`<div class="area-banner"><span class="area-code">${esc(area)}</span><div><h3>${esc(a.wing||a.label||'Project area')}</h3><p>${a.size?a.size+' m² · ':''}Definition source: page ${a.source_page||'—'} · ${areaSheets(area).length} linked sheets</p></div>${project.overview_page?`<button data-page="${project.overview_page}">Locate in overview ↗</button>`:''}</div><div class="tabs"><button class="active">Work sequence</button><button data-go="services">Building services ↗</button><button data-go="drawings">All shared details ↗</button></div>`;
   }else if(route==='services')top=heading('DISCIPLINE DIRECTORY','Building services','The service disciplines discovered in this PDF, organized by system.')+`<div class="source-note" style="margin:0 0 23px">Services are linked to project areas only where the AI found supporting evidence. System-wide and uncertain sheets remain available here without forced area assignments.</div>`;
   else if(route==='review')top=heading('QUALITY & TRACEABILITY','A second look, where it matters.','Review inferred area links, unreadable titles and source inconsistencies. Every decision stays attached to its sheet.');
+  else if(route==='chat')top=heading('ASK DRAWINGS','Choose a sheet to ask about.','Search and open one drawing. Your conversation uses only that sheet.');
   else top=heading('DRAWING REGISTER','The complete drawing set.','Search every sheet, open its source, and explore related details.');
   $('#main').innerHTML=top+filters()+'<div id="results">'+listBody()+'</div>';
   $('#searchInput').oninput=e=>{query=e.target.value;updateResults()};$('#levelFilter').onchange=e=>{level=e.target.value;updateResults()};$('#disciplineFilter').onchange=e=>{discipline=e.target.value;updateResults()};$('#viewFilter').onchange=e=>{viewType=e.target.value;updateResults()};$('#workStageFilter').onchange=e=>{stageValue=e.target.value;updateResults()};
@@ -70,7 +72,7 @@ function render(){
 function updateResults(){$('#results').innerHTML=listBody();bindMain()}
 function bindMain(){ $('#main').querySelectorAll('[data-area]').forEach(b=>b.onclick=()=>navigate('area',b.dataset.area));$('#main').querySelectorAll('[data-page]').forEach(b=>b.onclick=()=>openPage(+b.dataset.page));$('#main').querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>navigate(b.dataset.go)); }
 function openPage(page){
- currentPage=page;zoom=100;$('#zoomReset').textContent='Fit';const s=project.pages[page-1];$('#viewerTitle').textContent=s.title;$('#viewerCode').textContent=s.number||s.discipline;$('#pageLabel').textContent=`${page} / ${project.page_count}`;$('#previousPage').disabled=page===1;$('#nextPage').disabled=page===project.page_count;$('#sourceLink').href=base()+'/pdf#page='+page;$('#drawingImage').style.width='100%';$('#drawingImage').src=imageUrl(page,2300);$('#drawingImage').alt=s.title+' — source page '+page;$('#drawingScroll').scrollTop=0;renderDetails(s);if(!$('#viewer').open)$('#viewer').showModal();
+ currentPage=page;zoom=100;$('#zoomReset').textContent='Fit';const s=project.pages[page-1];$('#viewerTitle').textContent=s.title;$('#viewerCode').textContent=s.number||s.discipline;$('#pageLabel').textContent=`${page} / ${project.page_count}`;$('#previousPage').disabled=page===1;$('#nextPage').disabled=page===project.page_count;$('#sourceLink').href=base()+'/pdf#page='+page;$('#drawingImage').style.width='100%';$('#drawingImage').src=imageUrl(page,2300);$('#drawingImage').alt=s.title+' — source page '+page;$('#drawingScroll').scrollTop=0;renderDetails(s);if(typeof mountSheetChat==='function')mountSheetChat();if(!$('#viewer').open)$('#viewer').showModal();
 }
 function renderDetails(s){
  const related=project.pages.filter(p=>p.page!==s.page&&s.references.includes(p.number));
@@ -96,6 +98,6 @@ async function saveReview(e){
  try{await api(base()+`/pages/${currentPage}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});project=await api(base());renderNav();render();openPage(currentPage);toast('Classification saved. Your directory is updated.')}catch(e){toast(e.message)}finally{button.disabled=false}
 }
 document.querySelectorAll('[data-nav]').forEach(b=>b.onclick=()=>project&&navigate(b.dataset.nav));$('.brand').onclick=e=>{e.preventDefault();showHome()};$('#projectSelect').onchange=e=>selectSavedProject(e.target.value);$('#settingsButton').onclick=()=>$('#settings').showModal();$('#uploadButton').onclick=()=>showHome();$('#fileInput').onchange=e=>importPDF(e.target.files[0]);$('#closeViewer').onclick=()=>$('#viewer').close();$('#previousPage').onclick=()=>currentPage>1&&openPage(currentPage-1);$('#nextPage').onclick=()=>currentPage<project.page_count&&openPage(currentPage+1);
-function setZoom(z){zoom=Math.max(40,Math.min(400,z));$('#drawingImage').style.width=zoom+'%';$('#zoomReset').textContent=zoom===100?'Fit':zoom+'%'}
+function setZoom(z){zoom=Math.max(40,Math.min(400,z));$('#drawingImage').style.width=zoom+'%';$('#zoomReset').textContent=zoom===100?'Fit':zoom+'%';if(typeof drawHighlights==='function')requestAnimationFrame(drawHighlights)}
 $('#zoomOut').onclick=()=>setZoom(zoom-25);$('#zoomIn').onclick=()=>setZoom(zoom+25);$('#zoomReset').onclick=()=>setZoom(100);
 
