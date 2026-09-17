@@ -14,9 +14,14 @@
   Image requests can supply `version` to reject a replaced source.
 - `data/<project-id>/tender.pdf` and `tender.json` store source, row index and decisions.
   Decisions are tied to specification identity; changed specs require another review.
-- Questions select tender rows with a bounded text budget alongside existing specification
-  retrieval. Confirmed row codes can guide specification retrieval. Only the selected
-  drawing is supplied as drawing evidence; other drawing pages remain outside chat scope.
+- The tender attachment is normally the tender DRAWING set: the same PDF as `source.pdf`.
+  When `tender.hash` equals the drawing fingerprint, a row's page IS the sheet, so only the
+  open sheet's own rows are supplied, complete and in printed order (`SHEET_ROW_LIMIT`,
+  `TEXT_BUDGET`), and rows on other sheets are out of scope exactly as other drawings are.
+  A genuinely separate tender document has no such correspondence, so it keeps whole-document
+  relevance ranking (`ROW_LIMIT`). `TENDER_SHEET_SCOPE` / `TENDER_DOCUMENT_SCOPE` tell the model
+  which it received, and therefore what a missing row means. Confirmed row codes can guide
+  specification and cost retrieval. Only the selected drawing is supplied as drawing evidence.
 - `tender_hash` and `tender_context` are saved on answers. Context covers tender hash,
   extraction version, matcher version, specification identity and all review decisions.
   Both generated cache keys and conversation-based reuse check this context. Old explicit
@@ -82,6 +87,13 @@ implementation summaries as proof these issues are resolved.
   `spec_refs` (checked against the PDF text), removes repeated drawing sources,
   and flags answer measurements not found in the text read (`unverified`).
   The question page shows specification pages in its left pane.
+- Cost breakdown: a second optional per-project PDF (bill of quantities, schedule of rates or
+  cost plan), added the same way and read by the same `backend/specs.py` indexer. Its pages are
+  chosen per question like the specification's and sent as `cost_breakdown`. `COST_PROMPT` asks
+  for `[Cost p.N]` citations and `cost_refs`, forbids calculating or re-rating, and forbids
+  presenting a project-wide measured quantity as the amount shown on one drawing. Unlike the
+  tender, a cost breakdown is a separate document, so it has no page correspondence with the
+  drawings and is always searched whole.
 - Answer reuse: the server checks normalized question text and saved context.
   Capitalization and extra whitespace are ignored; paraphrases are not matched.
   Matching answers should avoid a provider call and report zero new usage.
@@ -102,6 +114,8 @@ particular, filters and answer reuse still require debugging in the actual UI.
 - `data/<project-id>/answers.json`: saved provider answers.
 - `data/<project-id>/spec.pdf`, `spec.json`, `spec-pages/`: linked technical
   specification, its local index and rendered page images.
+- `data/<project-id>/cost.pdf`, `cost.json`, `cost-pages/`: linked cost breakdown, same
+  shape and same local indexer.
 - `data/settings.json`: selected OpenRouter model.
 - `.env`: OpenRouter API key. Do not commit credentials or private project data.
 
@@ -118,6 +132,8 @@ local work. This snapshot does not include a user's local project data.
 - `POST /api/projects/{id}/spec`: add or replace the project's technical specification (no AI).
 - `DELETE /api/projects/{id}/spec`: remove it. `GET …/spec/pdf` and
   `GET …/spec/pages/{page}/image` serve the file and page images.
+- `…/cost` mirrors every `…/spec` route. Both are served by one set of helpers in
+  `backend/main.py` (`DOCS`, `store_doc`, `remove_doc`, `doc_file`, `doc_image`).
 
 ## Running
 

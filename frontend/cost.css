@@ -1,0 +1,9 @@
+/* Cost breakdown: the second reference PDF. It reuses the specification's layout in a warmer
+   accent, so a priced page is never mistaken for a "how to work" page. */
+.spec-nav+.spec-nav{margin-top:14px}
+#costNav .spec-nav-icon{background:#f0e8d6;color:#8a6a1f}
+.spec-panel.is-cost .spec-panel-icon{background:#f4eddc;color:#8a6a1f}
+.spec-refs.is-cost .spec-thumb{background:#f8f2e4}
+.spec-refs.is-cost .spec-meta b{background:#f2e8d2;color:#7d5f1a}
+.cite[data-doc=cost]{border-color:#e3d3a8;background:#f7f0df;color:#7d5f1a}
+#costBrowse[aria-pressed=true]{background:#f4ecd9;color:#7d5f1a}

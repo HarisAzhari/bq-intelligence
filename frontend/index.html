@@ -1,12 +1,14 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Drawing Atlas · Project directory</title><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/ingestion.css"><link rel="stylesheet" href="/chat.css"><script defer src="/app.js"></script><script defer src="/ingestion.js"></script><script defer src="/chat.js"></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Drawing Atlas · Project directory</title><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/ingestion.css"><link rel="stylesheet" href="/chat.css"><link rel="stylesheet" href="/cost.css"><script defer src="/app.js"></script><script defer src="/ingestion.js"></script><script defer src="/chat.js"></script></head>
 <body>
 <aside class="sidebar">
   <a class="brand" href="#"><span class="brand-icon">▧</span><span>drawing<span class="brand-light">atlas</span><small>FROM SHEETS TO SPACES</small></span></a>
-  <div class="project-label">WORKSPACE</div><select id="projectSelect" aria-label="Choose project"></select><div id="specNav" class="spec-nav" hidden></div>
+  <div class="sidebar-scroll">
+  <div class="project-label">WORKSPACE</div><select id="projectSelect" aria-label="Choose project"></select><div id="specNav" class="spec-nav" hidden></div><div id="costNav" class="spec-nav" hidden></div>
   <div class="nav-main"><button data-nav="overview" class="nav active"><span>◫</span> Project overview</button><button data-nav="drawings" class="nav"><span>▤</span> All drawings <b id="navCount">—</b></button><button data-nav="chat" class="nav"><span>✧</span> Ask drawings</button><button data-nav="services" class="nav"><span>⌁</span> Building services</button><button data-nav="review" hidden class="nav"><span>◇</span> Review queue <b id="reviewCount">—</b></button></div>
   <div class="project-label area-label">PROJECT AREAS <span id="areaCount"></span></div><div id="areaNav" class="area-nav"></div>
+  </div>
   <div class="sidebar-bottom"><div class="local-dot"></div><div><strong>Local workspace</strong><small>Your source files stay here</small></div><button id="settingsButton" aria-label="AI settings">⚙</button></div>
 </aside>
 <div class="shell">

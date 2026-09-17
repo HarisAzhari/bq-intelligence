@@ -239,5 +239,58 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(result['tender_refs'][0]['verified'])
 
 
+class SheetScopeTests(unittest.TestCase):
+    """The tender attachment is normally the tender DRAWING set, so a row's page is a sheet."""
+
+    NAMES=['alpha','bravo','charlie','delta','echo','foxtrot']
+
+    def index(self):
+        rows=[dict(row_fixture(),id=f'r{n}',page=(n+1)//2,
+                   text=f'{self.NAMES[n-1]} finish item\n{100+n}\nm2') for n in range(1,7)]
+        return dict(index_fixture(),rows=rows)
+
+    def test_only_this_sheets_rows_are_supplied(self):
+        chosen=tender.select_tender(self.index(),spec_fixture(),'FF-06','tile',page=2)
+        self.assertEqual([r['id'] for r in chosen['rows']],['r3','r4'])
+        self.assertEqual(chosen['page'],2)
+
+    def test_a_sheets_rows_are_sent_even_without_matching_words(self):
+        chosen=tender.select_tender(self.index(),spec_fixture(),'','completely unrelated wording',page=3)
+        self.assertEqual([r['id'] for r in chosen['rows']],['r5','r6'])
+
+    def test_rows_arrive_in_printed_order_not_by_score(self):
+        # r6 scores higher, but a schedule must read the way it is drawn.
+        chosen=tender.select_tender(self.index(),spec_fixture(),'','foxtrot',page=3)
+        self.assertEqual([r['id'] for r in chosen['rows']],['r5','r6'])
+
+    def test_a_separate_tender_document_still_searches_every_page(self):
+        # Asked from sheet 1, a matching row on sheet 3 is still reachable.
+        chosen=tender.select_tender(self.index(),spec_fixture(),'','foxtrot')
+        self.assertEqual([r['id'] for r in chosen['rows']],['r6'])
+        self.assertIsNone(chosen['page'])
+
+    def test_an_empty_sheet_supplies_nothing(self):
+        chosen=tender.select_tender(self.index(),spec_fixture(),'FF-06','tile',page=99)
+        self.assertEqual(chosen['rows'],[])
+        self.assertFalse(chosen['truncated'])
+
+
+class SheetScopeApiTests(ApiTests):
+    """Wiring: the page reaches select_tender only when tender.pdf is the drawing set."""
+
+    def test_same_pdf_limits_rows_to_the_open_sheet(self):
+        self.folder.joinpath('tender.pdf').write_bytes(self.folder.joinpath('source.pdf').read_bytes())
+        index=tender.index_tender(self.folder/'tender.pdf','Tender Drawings.pdf')
+        main.atomic(self.folder/'tender.json',index)
+        with patch.object(main.tender_tools,'select_tender',wraps=tender.select_tender) as select:
+            self.client.post(self.prefix+'/pages/1/chat',json={'question':'What is FF-06?'})
+        self.assertEqual(select.call_args.kwargs['page'],1)
+
+    def test_a_different_pdf_searches_the_whole_tender(self):
+        with patch.object(main.tender_tools,'select_tender',wraps=tender.select_tender) as select:
+            self.client.post(self.prefix+'/pages/1/chat',json={'question':'What is FF-06?'})
+        self.assertIsNone(select.call_args.kwargs['page'])
+
+
 if __name__=='__main__':
     unittest.main()

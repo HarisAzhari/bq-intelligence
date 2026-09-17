@@ -12,6 +12,9 @@ from backend.specs import find_codes, terms
 
 VERSION = 1
 MATCH_VERSION = 1
+ROW_LIMIT = 16          # rows sent when the tender is a separate document
+SHEET_ROW_LIMIT = 120   # rows sent when they are this drawing sheet's own rows
+TEXT_BUDGET = 22000
 FIELDS = {
     'item': ('item', 'item no', 'item number', 'no', 'bill item', 'ref'),
     'code': ('code', 'material code', 'spec code', 'reference'),
@@ -211,12 +214,23 @@ def review_rows(index, spec, drawings=None):
     return result
 
 
-def select_tender(index, spec, sheet_text, question, history=()):
+def select_tender(index, spec, sheet_text, question, history=(), page=None):
+    """Tender rows for one question.
+
+    When the tender attachment is the tender drawing set itself, `page` is the sheet being asked
+    about: its own printed rows are the evidence, and rows printed on other sheets are out of
+    scope, exactly as other drawing sheets are. `page=None` searches the whole document, which is
+    what a separately issued tender summary needs.
+    """
     sheet_codes, question_codes = find_codes(sheet_text), find_codes(question)
     query = set(terms(question))
     earlier = set(terms(' '.join(t['content'] for t in history if t.get('role') == 'user')[-4000:]))
+    decisions = index.get('decisions', {})
     scored = []
-    for row in review_rows(index, spec):
+    for order, row in enumerate(index['rows']):
+        if page is not None and row['page'] != page:
+            continue
+        row = dict(row, link=match_row(row, spec, decisions))
         linked = set(row['link']['codes'])
         row_terms = set(terms(row['text']))
         score = len(query & row_terms) * 2
@@ -227,18 +241,22 @@ def select_tender(index, spec, sheet_text, question, history=()):
             score += 8
         if re.search(r'\b' + re.escape(row['id']) + r'\b', question, re.I):
             score += 60
-        if score:
-            scored.append((score, row))
-    scored.sort(key=lambda value: (-value[0], value[1]['page'], value[1]['id']))
-    chosen, size = [], 0
-    for _, row in scored:
-        if len(chosen) >= 16 or size + len(row['text']) > 22000:
+        # Every row printed on the sheet is evidence, whether or not it echoes the question.
+        if score or page is not None:
+            scored.append((-score, order, row))
+    scored.sort()
+    limit = SHEET_ROW_LIMIT if page is not None else ROW_LIMIT
+    picked, size = [], 0
+    for _, order, row in scored:
+        if len(picked) >= limit or size + len(row['text']) > TEXT_BUDGET:
             break
         size += len(row['text'])
-        chosen.append(row)
+        picked.append((order, row))
+    # Supplied in printed order, so a schedule reads the way it is drawn.
+    chosen = [row for _, row in sorted(picked, key=lambda value: value[0])]
     return dict(filename=index['filename'], hash=index['hash'], context_hash=context_hash(index, spec),
-                rows=chosen, row_count=len(index['rows']), warnings=index['warnings'],
-                truncated=len(chosen) < len(scored))
+                rows=chosen, row_count=len(index['rows']), page=page, sheet_row_count=len(scored),
+                warnings=index['warnings'], truncated=len(chosen) < len(scored))
 
 
 def locate_tender_refs(selected, refs):

@@ -203,7 +203,8 @@ def project(pid:str):
         except (OSError,ValueError,KeyError,TypeError):
             pass
     p['job']=job_state(pid)
-    p['spec']=spec_summary(pid)
+    p['spec']=doc_summary(pid,'spec')
+    p['cost']=doc_summary(pid,'cost')
     p['tender']=tender_tools.summary(tender_index(pid), spec_index(pid))
     return p
 
@@ -212,7 +213,7 @@ def delete_project(pid:str):
     target=folder(pid)
     with LOCK:
         if pid in ACTIVE: raise HTTPException(409,'Pause or wait for this generation request before deleting the project.')
-        if pid in SPEC_ACTIVE or pid in TENDER_ACTIVE or chat_running(pid): raise HTTPException(409,'Wait for the document request before deleting the project.')
+        if docs_busy(pid) or chat_running(pid): raise HTTPException(409,'Wait for the document request before deleting the project.')
         if not target.exists(): raise HTTPException(404,'Project not found')
         shutil.rmtree(target)
         JOBS.pop(pid,None);CANCEL.pop(pid,None)
@@ -405,7 +406,7 @@ def chat_stream(pid: str, page: int, body: Question):
         enqueue(dict(event=event, **data))
     def work():
         try:
-            emit('status', dict(text='Preparing drawing, specification and tender evidence…'))
+            emit('status', dict(text='Preparing drawing, specification, cost and tender evidence…'))
             emit('done', dict(result=run_chat(pid, page, body, emit)))
         except HTTPException as exc:
             emit('error', dict(message=exc.detail))
@@ -438,7 +439,7 @@ def run_chat(pid: str, page: int, body: Question, emit=None):
     identity = (pid, page)
     with LOCK:
         if identity in CHAT_ACTIVE: raise HTTPException(409, 'An answer is already being prepared for this sheet.')
-        if pid in SPEC_ACTIVE or pid in TENDER_ACTIVE: raise HTTPException(409, 'Wait for the document upload to finish.')
+        if docs_busy(pid): raise HTTPException(409, 'Wait for the document upload to finish.')
         CHAT_ACTIVE.add(identity)
     try:
         with LOCK:
@@ -453,6 +454,8 @@ def run_chat(pid: str, page: int, body: Question, emit=None):
             history = [dict(role=t['role'], content=t['content']) for t in state['turns']]
             spec = spec_index(pid) if body.use_spec else None
             spec_hash = spec['hash'] if spec else None
+            cost = cost_index(pid) if body.use_cost else None
+            cost_hash = cost['hash'] if cost else None
             tender = tender_index(pid) if body.use_tender else None
             tender_hash = tender['hash'] if tender else None
             tender_context = tender_tools.context_hash(tender, spec)
@@ -466,7 +469,8 @@ def run_chat(pid: str, page: int, body: Question, emit=None):
                 conversation=state['conversation_id'], model=current_model(), question=normalized_question(body.question),
                 scope=scope, history=history, answer_version=ANSWER_VERSION,
                 tender=tender_context,
-                **({'spec': spec_hash} if spec_hash else {})), sort_keys=True).encode()).hexdigest()
+                **({'spec': spec_hash} if spec_hash else {}),
+                **({'cost': cost_hash} if cost_hash else {})), sort_keys=True).encode()).hexdigest()
             cache_path = folder(pid)/'answers.json'
             cache = json.loads(cache_path.read_text(encoding='utf8')) if cache_path.exists() else {}
             hit = None
@@ -484,6 +488,7 @@ def run_chat(pid: str, page: int, body: Question, emit=None):
                     t = state['turns'][i]
                     if (t.get('scope') == scope and t.get('context_key') == context_key and t.get('pdf_hash') == fingerprint
                             and t.get('model') == current_model() and t.get('spec_hash') == spec_hash
+                            and t.get('cost_hash') == cost_hash
                             and t.get('tender_context') == tender_context
                             and t.get('answer_version', 1) == ANSWER_VERSION):
                         source_turn = i
@@ -494,7 +499,7 @@ def run_chat(pid: str, page: int, body: Question, emit=None):
                         reason='A previous answer exists, but its documents, material matches, scope, conversation, model or answer rules differ. No AI request was sent.')
             if source_turn is not None:
                 previous = state['turns'][source_turn]
-                hit = dict(answer=previous['content'], sources=[], spec_refs=[], unverified=[],
+                hit = dict(answer=previous['content'], sources=[], spec_refs=[], cost_refs=[], unverified=[],
                     usage=previous.get('original_usage') if previous.get('cached') else previous.get('usage', {}))
         if hit:
             result = dict(hit, cached=True, original_usage=hit.get('usage', {}),
@@ -502,14 +507,22 @@ def run_chat(pid: str, page: int, body: Question, emit=None):
         else:
             if not ready(): raise HTTPException(400, 'Add an OpenRouter key in AI settings first.')
             request = body.model_copy(update={'scope':scope, 'history':[Turn(**t) for t in history[-20:]]})
-            extra = dict(spec=select_spec(spec, folder(pid)/'spec.pdf', s['text'], body.question, history,
-                                          drawing=(folder(pid)/'source.pdf', page))) if spec else {}
+            drawing = (folder(pid)/'source.pdf', page)
+            def choose(kind, index, question):
+                return select_spec(index, folder(pid)/f'{kind}.pdf', s['text'], question, history, drawing=drawing)
+            extra = {kind: choose(kind, index, body.question)
+                     for kind, index in (('spec', spec), ('cost', cost)) if index}
             if tender:
-                extra['tender'] = tender_tools.select_tender(tender, spec, s['text'], body.question, history)
+                # The tender attachment is usually the tender DRAWING set: the same PDF as the
+                # drawings. Then a row's page is this sheet, and only its own rows are evidence.
+                sheet_rows = page if tender['hash'] == fingerprint else None
+                extra['tender'] = tender_tools.select_tender(tender, spec, s['text'], body.question,
+                                                             history, page=sheet_rows)
                 linked_codes = sorted({c for r in extra['tender']['rows'] for c in r['link']['codes']})
-                if spec and linked_codes:
-                    extra['spec'] = select_spec(spec, folder(pid)/'spec.pdf', s['text'],
-                        body.question + ' ' + ' '.join(linked_codes), history, drawing=(folder(pid)/'source.pdf', page))
+                # Confirmed tender materials also point at the reference pages worth reading.
+                if linked_codes:
+                    for kind, index in (('spec', spec), ('cost', cost)):
+                        if index: extra[kind] = choose(kind, index, body.question + ' ' + ' '.join(linked_codes))
             if emit: extra['emit'] = emit
             result = ask_sheet(folder(pid)/'source.pdf', page, s['text'], request,
                              os.environ['OPENROUTER_API_KEY'].strip(), current_model(), **extra)
@@ -523,9 +536,11 @@ def run_chat(pid: str, page: int, body: Question, emit=None):
             state['turns'].extend([dict(role='user', content=body.question),
                 dict(role='assistant', content=result['answer'], sources=result.get('sources', []), usage=result.get('usage', {}),
                      spec_refs=result.get('spec_refs', []), spec_pages=result.get('spec_pages', []),
+                     cost_refs=result.get('cost_refs', []), cost_pages=result.get('cost_pages', []),
                      unverified=result.get('unverified', []),
                      answer_version=state['turns'][source_turn].get('answer_version', 1) if source_turn is not None else ANSWER_VERSION,
                      spec_hash=state['turns'][source_turn].get('spec_hash') if source_turn is not None else spec_hash,
+                     cost_hash=state['turns'][source_turn].get('cost_hash') if source_turn is not None else cost_hash,
                      tender_hash=state['turns'][source_turn].get('tender_hash') if source_turn is not None else tender_hash,
                      tender_context=state['turns'][source_turn].get('tender_context') if source_turn is not None else tender_context,
                      tender_refs=result.get('tender_refs', []), tender_rows=result.get('tender_rows', []),
@@ -580,9 +595,16 @@ def save_conversation(pid: str, page: int, body: SavedChat):
 
 SPEC_CACHE = {}
 SPEC_ACTIVE = set()
+COST_ACTIVE = set()
+# The reference PDFs a project can carry beside its drawings. Both are read on this
+# computer without any AI request, and both are offered to every drawing question.
+DOCS = {
+    'spec': dict(active=SPEC_ACTIVE, label='technical specification', limit_mb=300),
+    'cost': dict(active=COST_ACTIVE, label='cost breakdown', limit_mb=300),
+}
 
-def spec_index(pid):
-    path = folder(pid)/'spec.json'
+def doc_index(pid, kind):
+    path = folder(pid)/f'{kind}.json'
     try: stamp = path.stat().st_mtime_ns
     except FileNotFoundError: return None
     key = str(path)
@@ -590,98 +612,147 @@ def spec_index(pid):
         SPEC_CACHE[key] = (stamp, json.loads(path.read_text(encoding='utf8')))
     return SPEC_CACHE[key][1]
 
-def spec_summary(pid):
-    spec = spec_index(pid)
-    return spec_summary_of(spec) if spec else None
+def doc_summary(pid, kind):
+    index = doc_index(pid, kind)
+    return spec_summary_of(index) if index else None
+
+def spec_index(pid): return doc_index(pid, 'spec')
+
+def cost_index(pid): return doc_index(pid, 'cost')
+
+def spec_summary(pid): return doc_summary(pid, 'spec')
+
+def docs_busy(pid):
+    """True while any reference document of this project is being read."""
+    return pid in SPEC_ACTIVE or pid in COST_ACTIVE or pid in TENDER_ACTIVE
 
 def upgrade_specs():
-    """Rebuild specification indexes made by an older indexer, from the same PDF, on this computer."""
-    for path in DATA.glob('*/spec.json'):
-        try:
-            old = json.loads(path.read_text(encoding='utf8'))
-            if old.get('version') == SPEC_VERSION: continue
-            index = index_spec(path.parent/'spec.pdf', old.get('filename', 'specification.pdf'))
-            index['uploaded'] = old.get('uploaded', index['uploaded'])
-            with LOCK:
-                current = json.loads(path.read_text(encoding='utf8'))
-                if current.get('hash') == index['hash'] and current.get('version') != SPEC_VERSION:
-                    atomic(path, index)
-        except Exception as exc:
-            print(f'Specification index for {path.parent.name} was not upgraded: {exc}')
+    """Rebuild reference indexes made by an older indexer, from the same PDF, on this computer."""
+    for kind, doc in DOCS.items():
+        for path in DATA.glob(f'*/{kind}.json'):
+            try:
+                old = json.loads(path.read_text(encoding='utf8'))
+                if old.get('version') == SPEC_VERSION: continue
+                index = index_spec(path.parent/f'{kind}.pdf', old.get('filename', f'{kind}.pdf'), doc['label'])
+                index['uploaded'] = old.get('uploaded', index['uploaded'])
+                with LOCK:
+                    current = json.loads(path.read_text(encoding='utf8'))
+                    if current.get('hash') == index['hash'] and current.get('version') != SPEC_VERSION:
+                        atomic(path, index)
+            except Exception as exc:
+                print(f"The {doc['label']} index for {path.parent.name} was not upgraded: {exc}")
 
 def chat_running(pid):
     return any(active[0] == pid for active in CHAT_ACTIVE)
 
-@app.get('/api/projects/{pid}/spec')
-def get_spec(pid: str):
+async def store_doc(pid: str, kind: str, file: UploadFile):
+    """Link one reference PDF. Indexed locally; no AI request is made."""
+    doc = DOCS[kind]
     read(pid)
-    return dict(spec=spec_summary(pid))
-
-@app.post('/api/projects/{pid}/spec')
-async def upload_spec(pid: str, file: UploadFile = File(...)):
-    """Link a technical specification. Indexed locally; no AI request is made."""
-    read(pid)
-    if not file.filename or not file.filename.lower().endswith('.pdf'): raise HTTPException(400, 'Choose the specification as a PDF.')
+    if not file.filename or not file.filename.lower().endswith('.pdf'):
+        raise HTTPException(400, f"Choose the {doc['label']} as a PDF.")
     with LOCK:
-        if pid in SPEC_ACTIVE: raise HTTPException(409, 'A specification is already being read for this project.')
-        if pid in TENDER_ACTIVE or chat_running(pid): raise HTTPException(409, 'Wait for the current document request to finish.')
-        SPEC_ACTIVE.add(pid)
+        if pid in doc['active']: raise HTTPException(409, f"A {doc['label']} is already being read for this project.")
+        if docs_busy(pid) or chat_running(pid): raise HTTPException(409, 'Wait for the current document request to finish.')
+        doc['active'].add(pid)
     target = folder(pid)
-    temp = target/'spec.upload'
+    temp = target/f'{kind}.upload'
     try:
         size = 0
         with temp.open('wb') as out:
             while chunk := await file.read(1024*1024):
                 size += len(chunk)
-                if size > 300*1024*1024: raise HTTPException(413, 'Maximum specification size is 300 MB.')
+                if size > doc['limit_mb']*1024*1024:
+                    raise HTTPException(413, f"Maximum {doc['label']} size is {doc['limit_mb']} MB.")
                 out.write(chunk)
         try:
-            index = await run_in_threadpool(index_spec, temp, file.filename)
+            index = await run_in_threadpool(index_spec, temp, file.filename, doc['label'])
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         except Exception as exc:
             raise HTTPException(400, 'Cannot read this PDF. Check that it is valid and unlocked.') from exc
         with LOCK:
-            if chat_running(pid): raise HTTPException(409, 'Wait for the current answer before changing the specification.')
-            temp.replace(target/'spec.pdf')
-            atomic(target/'spec.json', index)
-            shutil.rmtree(target/'spec-pages', ignore_errors=True)
-        return spec_summary(pid)
+            if chat_running(pid): raise HTTPException(409, f"Wait for the current answer before changing the {doc['label']}.")
+            temp.replace(target/f'{kind}.pdf')
+            atomic(target/f'{kind}.json', index)
+            shutil.rmtree(target/f'{kind}-pages', ignore_errors=True)
+        return doc_summary(pid, kind)
     finally:
         temp.unlink(missing_ok=True)
         await file.close()
-        with LOCK: SPEC_ACTIVE.discard(pid)
+        with LOCK: doc['active'].discard(pid)
 
-@app.delete('/api/projects/{pid}/spec', status_code=204)
-def delete_spec(pid: str):
+def remove_doc(pid: str, kind: str):
+    doc = DOCS[kind]
     read(pid)
     target = folder(pid)
     with LOCK:
-        if pid in SPEC_ACTIVE or pid in TENDER_ACTIVE or chat_running(pid): raise HTTPException(409, 'Wait for the current request before removing the specification.')
-        for name in ['spec.json', 'spec.pdf']: (target/name).unlink(missing_ok=True)
-        shutil.rmtree(target/'spec-pages', ignore_errors=True)
+        if docs_busy(pid) or chat_running(pid):
+            raise HTTPException(409, f"Wait for the current request before removing the {doc['label']}.")
+        for name in (f'{kind}.json', f'{kind}.pdf'): (target/name).unlink(missing_ok=True)
+        shutil.rmtree(target/f'{kind}-pages', ignore_errors=True)
     return Response(status_code=204)
 
-@app.get('/api/projects/{pid}/spec/pdf')
-def spec_pdf(pid: str):
-    if not spec_index(pid): raise HTTPException(404, 'No technical specification is linked to this project.')
-    return FileResponse(folder(pid)/'spec.pdf', media_type='application/pdf')
+def doc_file(pid: str, kind: str):
+    if not doc_index(pid, kind): raise HTTPException(404, f"No {DOCS[kind]['label']} is linked to this project.")
+    return FileResponse(folder(pid)/f'{kind}.pdf', media_type='application/pdf')
 
-@app.get('/api/projects/{pid}/spec/pages/{page}/image')
-def spec_page_image(pid: str, page: int, width: int = 1400):
-    spec = spec_index(pid)
-    if not spec: raise HTTPException(404, 'No technical specification is linked to this project.')
-    if not 1 <= page <= spec['page_count']: raise HTTPException(404, 'Page not found')
+def doc_image(pid: str, kind: str, page: int, width: int):
+    index = doc_index(pid, kind)
+    if not index: raise HTTPException(404, f"No {DOCS[kind]['label']} is linked to this project.")
+    if not 1 <= page <= index['page_count']: raise HTTPException(404, 'Page not found')
     width = max(200, min(width, 2400))
-    cache = folder(pid)/'spec-pages'/f"{spec['hash'][:12]}-{page}-{width}.png"
+    cache = folder(pid)/f'{kind}-pages'/f"{index['hash'][:12]}-{page}-{width}.png"
     if not cache.exists():
         with PDF_LOCK:
             if not cache.exists():
                 cache.parent.mkdir(exist_ok=True)
-                with fitz.open(folder(pid)/'spec.pdf') as doc:
+                with fitz.open(folder(pid)/f'{kind}.pdf') as doc:
                     p = doc[page-1]; scale = min(width/p.rect.width, 3200/p.rect.height)
                     p.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False).save(cache)
     return FileResponse(cache, media_type='image/png', headers={'Cache-Control': 'private, max-age=86400'})
+
+@app.get('/api/projects/{pid}/spec')
+def get_spec(pid: str):
+    read(pid)
+    return dict(spec=doc_summary(pid, 'spec'))
+
+@app.post('/api/projects/{pid}/spec')
+async def upload_spec(pid: str, file: UploadFile = File(...)):
+    return await store_doc(pid, 'spec', file)
+
+@app.delete('/api/projects/{pid}/spec', status_code=204)
+def delete_spec(pid: str):
+    return remove_doc(pid, 'spec')
+
+@app.get('/api/projects/{pid}/spec/pdf')
+def spec_pdf(pid: str):
+    return doc_file(pid, 'spec')
+
+@app.get('/api/projects/{pid}/spec/pages/{page}/image')
+def spec_page_image(pid: str, page: int, width: int = 1400):
+    return doc_image(pid, 'spec', page, width)
+
+@app.get('/api/projects/{pid}/cost')
+def get_cost(pid: str):
+    read(pid)
+    return dict(cost=doc_summary(pid, 'cost'))
+
+@app.post('/api/projects/{pid}/cost')
+async def upload_cost(pid: str, file: UploadFile = File(...)):
+    return await store_doc(pid, 'cost', file)
+
+@app.delete('/api/projects/{pid}/cost', status_code=204)
+def delete_cost(pid: str):
+    return remove_doc(pid, 'cost')
+
+@app.get('/api/projects/{pid}/cost/pdf')
+def cost_pdf(pid: str):
+    return doc_file(pid, 'cost')
+
+@app.get('/api/projects/{pid}/cost/pages/{page}/image')
+def cost_page_image(pid: str, page: int, width: int = 1400):
+    return doc_image(pid, 'cost', page, width)
 
 TENDER_ACTIVE = set()
 
@@ -693,7 +764,7 @@ def tender_index(pid):
 
 
 def tender_idle(pid):
-    if pid in TENDER_ACTIVE or pid in SPEC_ACTIVE or chat_running(pid):
+    if docs_busy(pid) or chat_running(pid):
         raise HTTPException(409, 'Wait for the current answer or document upload before changing tender data.')
 
 

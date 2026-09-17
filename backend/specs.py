@@ -292,7 +292,8 @@ def _field(fields, patterns):
     return ''
 
 
-def index_spec(path, filename):
+def index_spec(path, filename, label='specification'):
+    """Read one reference PDF (specification or cost breakdown) on this computer."""
     data = Path(path).read_bytes()
     pages = []
     with PDF_LOCK:
@@ -305,7 +306,7 @@ def index_spec(path, filename):
                 raise ValueError('Upload an unlocked PDF.')
             count = len(doc)
         if not 1 <= count <= MAX_PAGES:
-            raise ValueError(f'The specification must contain 1–{MAX_PAGES} pages.')
+            raise ValueError(f'The {label} must contain 1–{MAX_PAGES} pages.')
         for i in range(count):
             # Released between pages so drawings stay viewable while a long file is read.
             with PDF_LOCK:
@@ -495,14 +496,14 @@ def select_spec(index, path, sheet_text, question, history=(), drawing=None):
                              if pages[i]['chars'] < MIN_TEXT or not pages[i]['readable']][:MAX_IMAGE_PAGES])
 
 
-def render_spec_pages(path, numbers):
+def render_spec_pages(path, numbers, label='Technical specification'):
     content = []
     for number in numbers[:MAX_IMAGE_PAGES]:
         with PDF_LOCK, fitz.open(path) as doc:
             page = doc[number - 1]
             scale = 1600 / max(page.rect.width, page.rect.height)
             png = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False).tobytes('png')
-        content += [dict(type='text', text=f'Technical specification page {number} (picture; its text layer is missing or unreadable).'),
+        content += [dict(type='text', text=f'{label} page {number} (picture; its text layer is missing or unreadable).'),
                     dict(type='image_url', image_url={'url': 'data:image/png;base64,' + base64.b64encode(png).decode()})]
     return content
 
@@ -524,7 +525,7 @@ def _find_quote(sheet, quote):
     return []
 
 
-def locate_spec_refs(path, refs):
+def locate_spec_refs(path, refs, title='Specification'):
     """Keep references to real pages and find their quotes; never trust the model's wording."""
     out = []
     with PDF_LOCK, fitz.open(path) as doc:
@@ -545,6 +546,6 @@ def locate_spec_refs(path, refs):
                     boxes.append([max(0, min(1, v)) for v in (rect.x0 / bounds.width, rect.y0 / bounds.height,
                                                               rect.x1 / bounds.width, rect.y1 / bounds.height)])
             out.append(dict(page=page, code=code_of(*match.groups()) if match else '',
-                            title=str(ref.get('title') or 'Specification')[:160], quote=quote,
+                            title=str(ref.get('title') or title)[:160], quote=quote,
                             boxes=boxes, verified=bool(boxes)))
     return out

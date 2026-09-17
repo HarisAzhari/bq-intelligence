@@ -3,7 +3,14 @@ let watching=null,pollTimer=null,uploading=false;
 const phases=[['extracting','Prepare the PDF','Save your original drawing set and its page numbers.'],['document','Build navigation from the whole PDF','One document analysis connects the areas, work stages and drawing pages. This can take several minutes; there is no per-sheet review queue.'],['publishing','Open your directory','Create your area buttons and connected drawing navigation.']];
 const newButton=document.createElement('button');newButton.className='nav';newButton.innerHTML='<span>＋</span> New project';newButton.onclick=()=>showHome();$('.nav-main').prepend(newButton);
 
-async function refreshConfig(){config=await api('/api/config');$('#modelName').textContent=config.model;$('#connectionModel').value=config.model;$('#aiStatus').textContent=config.ai_ready?'AI connected':'AI connection needed';}
+async function refreshConfig(){config=await api('/api/config');$('#modelName').textContent=config.model;$('#connectionModel').value=config.model;renderAiStatus();}
+// The header names the model that answers questions, so it is never a guess which one is active.
+function renderAiStatus(){
+ const status=$('#aiStatus');if(!status)return;
+ status.classList.toggle('is-offline',!config.ai_ready);
+ status.textContent=config.ai_ready?config.model:'AI connection needed';
+ status.title=config.ai_ready?`Active OpenRouter model: ${config.model}`:'Add an OpenRouter key in AI settings.';
+}
 async function refreshProjects(){const r=await api('/api/projects');projects=r.projects;$('#projectSelect').innerHTML='<option value="">New PDF…</option>'+projects.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}${p.engine==='legacy'?' · legacy prototype':''}</option>`).join('');}
 async function init(){try{await refreshConfig();await refreshProjects();showHome();}catch(e){$('#main').innerHTML=`<div class="empty"><h3>Couldn’t connect to the workspace</h3><p>${esc(e.message)}</p><button id="retryHome">Try again</button></div>`;$('#retryHome').onclick=init;}}
 function resetWorkspace(){project=null;area=null;route='home';watching=null;clearTimeout(pollTimer);$('#projectSelect').value='';$('#areaNav').innerHTML='<div class="nav-placeholder">Your PDF’s areas will appear here after generation.</div>';$('#areaCount').textContent='';$('#navCount').textContent='—';$('#reviewCount').textContent='—';$('#exportLink').hidden=true;$('#crumb').textContent='New project';document.querySelectorAll('[data-nav]').forEach(b=>b.classList.remove('active'));if(typeof renderSpecNav==='function')renderSpecNav();}
