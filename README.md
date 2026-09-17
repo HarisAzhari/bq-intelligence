@@ -3,16 +3,19 @@
 ## Ask about one sheet
 
 Choose **Ask drawings** in navigation and open a sheet, or open any drawing and
-select **Ask about this sheet** beside it. The assistant receives only that physical
+select **Ask AI about this drawing** beside it. Both open a full-screen question page
+with the drawing on the left and the conversation on the right; **Back** or the browser's
+Back button returns to where you were. The assistant receives only that physical
 page's extracted text, full image and enlarged title-block strips. It cannot consult
 other sheets. Choose an image-capable OpenRouter model in AI settings.
 
-Each **Send question** makes a paid request. No request runs merely by opening chat.
+Each new answer (**Ask** or Enter) makes a paid request. Suggested questions only fill in the
+question box. No request runs merely by opening the question page.
 Source regions highlight matched text or AI-proposed visual areas. Missing or repeated
 text falls back to the full sheet. Conversations are separate per project and page,
 saved in browser storage, and listed below Ask drawings for the current project.
 Clearing browser data removes saved chats. Each answer shows reported input, output,
-total tokens and cost, with conversation totals. Missing usage is shown as unavailable. Recent conversation (up to 20 messages) accompanies
+total tokens and cost under **Cost**, with conversation totals under **How it works**. Missing usage is shown as unavailable. Recent conversation (up to 20 messages) accompanies
 follow-up questions. Failed requests retain your question for manual retry.
 
 The endpoint is `POST /api/projects/{id}/pages/{page}/chat`. Chat does not modify
@@ -113,9 +116,11 @@ Chats, usage, reply filters and colors are saved in `data/<project-id>/chats.jso
 Reusable responses are saved in `data/<project-id>/answers.json`. Existing browser
 chats are imported when the project has no disk conversation for that page.
 
-Use the reply checkboxes to select highlight groups and each color picker to change
-its color. Clear filters restores all groups. The scope above the question box shows
-which replies guide the next answer. Changing filters or colors makes no AI request.
+Use each answer's **Show on drawing** switch to select highlight groups and **Color**
+to change its color. Each answer's **Where to look** cards show a close-up of each region;
+hovering one brings its outline forward, and clicking one scrolls the drawing to it.
+Dashed outlines are approximate AI regions. **Show all** restores all groups. The note above the question box shows
+which answers guide the next question. Changing filters or colors makes no AI request.
 AI regions remain approximate; manual drawing, resizing and citation auto-zoom have
 been removed. Normal viewer zoom still works. The original PDF is unchanged.
 
@@ -123,8 +128,8 @@ The server reuses an immediately repeated question only when PDF, page, conversa
 model, normalized question, selected regions and preceding conversation match.
 Capitalization and extra whitespace are ignored; paraphrases are not matched.
 When earlier identical questions exist but scope, context or verification details differ,
-the app offers Use previous answer or Generate fresh without sending an AI request. Color changes alone do not invalidate
-reuse. Generate a fresh answer bypasses the cache. Reused replies show zero new
+the app offers **Use saved answer** or **Get a new answer** without sending an AI request. Color changes alone do not invalidate
+reuse. **Always write a new answer** bypasses the cache. Reused replies show zero new
 usage; the original reply retains its generation usage. Save status shows whether
 changes reached the project. Filter controls are disabled while an answer or save
 is in progress. Restart the backend and refresh the browser after upgrading.

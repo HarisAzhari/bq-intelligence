@@ -17,7 +17,8 @@ implementation summaries as proof these issues are resolved.
 1. Upload a drawing PDF and prepare its pages locally.
 2. Confirm AI generation to build a project directory through OpenRouter.
 3. Browse project areas, work stages and drawings.
-4. Open a sheet and choose Ask about this sheet, or use Ask drawings in navigation.
+4. Open a sheet and choose Ask AI about this drawing, or use Ask drawings in navigation.
+   Both open the full-screen question page.
 5. Ask questions using only the selected physical sheet. Other sheets are outside
    the assistant's scope, even if the drawing references them.
 
@@ -33,6 +34,10 @@ implementation summaries as proof these issues are resolved.
   text matches can locate notes. AI regions are approximate and may be misplaced.
 - Highlight UI: `frontend/chat.js` renders regions, groups them by reply, supports
   group selection and color choices, and displays the next question's scope.
+  The question page is a full-screen dialog in `frontend/chat.js` (styles in
+  `frontend/chat.css`) with its own zoom and pan. "Where to look" cards crop the
+  sheet image around each region; clicking one scrolls to it and pulses it without
+  changing zoom or filters. Suggested questions fill the box and never send.
 - Removed controls: citation auto-zoom, manual marking, redraw, drag and resize.
   The viewer's ordinary zoom controls remain.
 - Chat history: one conversation per project and physical page, listed below
@@ -44,7 +49,7 @@ implementation summaries as proof these issues are resolved.
   Capitalization and extra whitespace are ignored; paraphrases are not matched.
   Matching answers should avoid a provider call and report zero new usage.
 - Changed context: a previous matching question with different scope or verification
-  details should offer Use previous answer or Generate fresh before a paid call.
+  details should offer Use saved answer or Get a new answer before a paid call.
 - Reused highlights: reused replies reference the original group; identical saved
   boxes should render once. Nearby distinct boxes should remain separate.
 
