@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 from backend.indexer import index_pdf, STAGES, PDF_LOCK
 from backend.ingestion import PipelineError, Paused, atomic
 from backend.specs import VERSION as SPEC_VERSION, index_spec, select_spec, summary as spec_summary_of
+from backend import tender as tender_tools
 from backend.navigation import NavigationPipeline as Pipeline, NavigationProvider as OpenRouter, VERSION as NAVIGATION_VERSION, usage_metrics
 
 ROOT=Path(__file__).resolve().parent.parent
@@ -203,6 +204,7 @@ def project(pid:str):
             pass
     p['job']=job_state(pid)
     p['spec']=spec_summary(pid)
+    p['tender']=tender_tools.summary(tender_index(pid), spec_index(pid))
     return p
 
 @app.delete('/api/projects/{pid}',status_code=204)
@@ -210,6 +212,7 @@ def delete_project(pid:str):
     target=folder(pid)
     with LOCK:
         if pid in ACTIVE: raise HTTPException(409,'Pause or wait for this generation request before deleting the project.')
+        if pid in SPEC_ACTIVE or pid in TENDER_ACTIVE or chat_running(pid): raise HTTPException(409,'Wait for the document request before deleting the project.')
         if not target.exists(): raise HTTPException(404,'Project not found')
         shutil.rmtree(target)
         JOBS.pop(pid,None);CANCEL.pop(pid,None)
@@ -402,7 +405,7 @@ def chat_stream(pid: str, page: int, body: Question):
         enqueue(dict(event=event, **data))
     def work():
         try:
-            emit('status', dict(text='Preparing drawing and specification excerpts…'))
+            emit('status', dict(text='Preparing drawing, specification and tender evidence…'))
             emit('done', dict(result=run_chat(pid, page, body, emit)))
         except HTTPException as exc:
             emit('error', dict(message=exc.detail))
@@ -435,6 +438,7 @@ def run_chat(pid: str, page: int, body: Question, emit=None):
     identity = (pid, page)
     with LOCK:
         if identity in CHAT_ACTIVE: raise HTTPException(409, 'An answer is already being prepared for this sheet.')
+        if pid in SPEC_ACTIVE or pid in TENDER_ACTIVE: raise HTTPException(409, 'Wait for the document upload to finish.')
         CHAT_ACTIVE.add(identity)
     try:
         with LOCK:
@@ -449,6 +453,9 @@ def run_chat(pid: str, page: int, body: Question, emit=None):
             history = [dict(role=t['role'], content=t['content']) for t in state['turns']]
             spec = spec_index(pid) if body.use_spec else None
             spec_hash = spec['hash'] if spec else None
+            tender = tender_index(pid) if body.use_tender else None
+            tender_hash = tender['hash'] if tender else None
+            tender_context = tender_tools.context_hash(tender, spec)
             # Only immediately repeated exchanges may be removed. Intervening context
             # changes force a fresh request, including ambiguous follow-up questions.
             while len(history) >= 2 and history[-1]['role'] == 'assistant' and history[-2]['role'] == 'user' and normalized_question(history[-2]['content']) == normalized_question(body.question):
@@ -458,6 +465,7 @@ def run_chat(pid: str, page: int, body: Question, emit=None):
             cache_key = hashlib.sha256(json.dumps(dict(version=1, pdf=fingerprint, page=page,
                 conversation=state['conversation_id'], model=current_model(), question=normalized_question(body.question),
                 scope=scope, history=history, answer_version=ANSWER_VERSION,
+                tender=tender_context,
                 **({'spec': spec_hash} if spec_hash else {})), sort_keys=True).encode()).hexdigest()
             cache_path = folder(pid)/'answers.json'
             cache = json.loads(cache_path.read_text(encoding='utf8')) if cache_path.exists() else {}
@@ -476,13 +484,14 @@ def run_chat(pid: str, page: int, body: Question, emit=None):
                     t = state['turns'][i]
                     if (t.get('scope') == scope and t.get('context_key') == context_key and t.get('pdf_hash') == fingerprint
                             and t.get('model') == current_model() and t.get('spec_hash') == spec_hash
+                            and t.get('tender_context') == tender_context
                             and t.get('answer_version', 1) == ANSWER_VERSION):
                         source_turn = i
                         break
                 if source_turn is None and candidates:
                     i = candidates[-1]
                     return dict(needs_choice=True, previous_turn=i, previous_answer=state['turns'][i]['content'],
-                        reason='A previous answer exists, but its scope, conversation context, model, technical specification, answer rules or saved verification details differ. No AI request was sent.')
+                        reason='A previous answer exists, but its documents, material matches, scope, conversation, model or answer rules differ. No AI request was sent.')
             if source_turn is not None:
                 previous = state['turns'][source_turn]
                 hit = dict(answer=previous['content'], sources=[], spec_refs=[], unverified=[],
@@ -495,6 +504,12 @@ def run_chat(pid: str, page: int, body: Question, emit=None):
             request = body.model_copy(update={'scope':scope, 'history':[Turn(**t) for t in history[-20:]]})
             extra = dict(spec=select_spec(spec, folder(pid)/'spec.pdf', s['text'], body.question, history,
                                           drawing=(folder(pid)/'source.pdf', page))) if spec else {}
+            if tender:
+                extra['tender'] = tender_tools.select_tender(tender, spec, s['text'], body.question, history)
+                linked_codes = sorted({c for r in extra['tender']['rows'] for c in r['link']['codes']})
+                if spec and linked_codes:
+                    extra['spec'] = select_spec(spec, folder(pid)/'spec.pdf', s['text'],
+                        body.question + ' ' + ' '.join(linked_codes), history, drawing=(folder(pid)/'source.pdf', page))
             if emit: extra['emit'] = emit
             result = ask_sheet(folder(pid)/'source.pdf', page, s['text'], request,
                              os.environ['OPENROUTER_API_KEY'].strip(), current_model(), **extra)
@@ -511,6 +526,9 @@ def run_chat(pid: str, page: int, body: Question, emit=None):
                      unverified=result.get('unverified', []),
                      answer_version=state['turns'][source_turn].get('answer_version', 1) if source_turn is not None else ANSWER_VERSION,
                      spec_hash=state['turns'][source_turn].get('spec_hash') if source_turn is not None else spec_hash,
+                     tender_hash=state['turns'][source_turn].get('tender_hash') if source_turn is not None else tender_hash,
+                     tender_context=state['turns'][source_turn].get('tender_context') if source_turn is not None else tender_context,
+                     tender_refs=result.get('tender_refs', []), tender_rows=result.get('tender_rows', []),
                      cached=result['cached'], original_usage=result.get('original_usage'),
                      highlight_ref=highlight_owner(state['turns'], source_turn) if source_turn is not None else None,
                      scope=state['turns'][source_turn].get('scope') if source_turn is not None else scope,
@@ -606,6 +624,7 @@ async def upload_spec(pid: str, file: UploadFile = File(...)):
     if not file.filename or not file.filename.lower().endswith('.pdf'): raise HTTPException(400, 'Choose the specification as a PDF.')
     with LOCK:
         if pid in SPEC_ACTIVE: raise HTTPException(409, 'A specification is already being read for this project.')
+        if pid in TENDER_ACTIVE or chat_running(pid): raise HTTPException(409, 'Wait for the current document request to finish.')
         SPEC_ACTIVE.add(pid)
     target = folder(pid)
     temp = target/'spec.upload'
@@ -638,7 +657,7 @@ def delete_spec(pid: str):
     read(pid)
     target = folder(pid)
     with LOCK:
-        if pid in SPEC_ACTIVE or chat_running(pid): raise HTTPException(409, 'Wait for the current request before removing the specification.')
+        if pid in SPEC_ACTIVE or pid in TENDER_ACTIVE or chat_running(pid): raise HTTPException(409, 'Wait for the current request before removing the specification.')
         for name in ['spec.json', 'spec.pdf']: (target/name).unlink(missing_ok=True)
         shutil.rmtree(target/'spec-pages', ignore_errors=True)
     return Response(status_code=204)
@@ -663,5 +682,126 @@ def spec_page_image(pid: str, page: int, width: int = 1400):
                     p = doc[page-1]; scale = min(width/p.rect.width, 3200/p.rect.height)
                     p.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False).save(cache)
     return FileResponse(cache, media_type='image/png', headers={'Cache-Control': 'private, max-age=86400'})
+
+TENDER_ACTIVE = set()
+
+
+def tender_index(pid):
+    path = folder(pid)/'tender.json'
+    with LOCK:
+        return json.loads(path.read_text(encoding='utf8')) if path.exists() else None
+
+
+def tender_idle(pid):
+    if pid in TENDER_ACTIVE or pid in SPEC_ACTIVE or chat_running(pid):
+        raise HTTPException(409, 'Wait for the current answer or document upload before changing tender data.')
+
+
+@app.get('/api/projects/{pid}/tender')
+def get_tender(pid: str):
+    with LOCK:
+        drawing = read(pid)
+        index, spec = tender_index(pid), spec_index(pid)
+        return dict(tender=tender_tools.summary(index, spec),
+                    rows=tender_tools.review_rows(index, spec, drawing) if index else [],
+                    items=(spec or {}).get('items', []))
+
+
+@app.post('/api/projects/{pid}/tender')
+async def upload_tender(pid: str, file: UploadFile = File(...)):
+    read(pid)
+    if not file.filename or not file.filename.lower().endswith('.pdf'):
+        raise HTTPException(400, 'Choose the tender summary as a PDF.')
+    with LOCK:
+        tender_idle(pid)
+        TENDER_ACTIVE.add(pid)
+    target = folder(pid)
+    temp = target/'tender.upload'
+    try:
+        size = 0
+        with temp.open('wb') as out:
+            while chunk := await file.read(1024*1024):
+                size += len(chunk)
+                if size > 150*1024*1024:
+                    raise HTTPException(413, 'Maximum tender summary size is 150 MB.')
+                out.write(chunk)
+        try:
+            index = await run_in_threadpool(tender_tools.index_tender, temp, file.filename)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(400, 'Cannot read this PDF. Check that it is valid and unlocked.') from exc
+        with LOCK:
+            previous = tender_index(pid)
+            if previous and previous['hash'] == index['hash']:
+                index['decisions'] = previous.get('decisions', {})
+            temp.replace(target/'tender.pdf')
+            atomic(target/'tender.json', index)
+            return tender_tools.summary(index, spec_index(pid))
+    finally:
+        temp.unlink(missing_ok=True)
+        await file.close()
+        with LOCK: TENDER_ACTIVE.discard(pid)
+
+
+class TenderDecision(BaseModel):
+    context_hash: str
+    action: Literal['confirm', 'unmatched', 'reset']
+    codes: list[str] = Field(default_factory=list, max_length=100)
+
+
+@app.patch('/api/projects/{pid}/tender/rows/{row_id}')
+def review_tender(pid: str, row_id: str, body: TenderDecision):
+    with LOCK:
+        read(pid)
+        tender_idle(pid)
+        index, spec = tender_index(pid), spec_index(pid)
+        if not index or not any(r['id'] == row_id for r in index['rows']):
+            raise HTTPException(404, 'Tender row not found.')
+        if body.context_hash != tender_tools.context_hash(index, spec):
+            raise HTTPException(409, 'Documents or matches changed. Reopen Review matches before saving.')
+        codes = sorted(set(body.codes))
+        known = {item['code'] for item in (spec or {}).get('items', [])}
+        if body.action == 'confirm' and (not codes or not set(codes) <= known):
+            raise HTTPException(400, 'Choose at least one existing specification material.')
+        if body.action == 'reset':
+            index['decisions'].pop(row_id, None)
+        else:
+            index['decisions'][row_id] = dict(action=body.action, codes=codes if body.action == 'confirm' else [],
+                                             spec=tender_tools.spec_identity(spec))
+        atomic(folder(pid)/'tender.json', index)
+        return tender_tools.summary(index, spec)
+
+
+@app.delete('/api/projects/{pid}/tender', status_code=204)
+def delete_tender(pid: str):
+    with LOCK:
+        read(pid)
+        tender_idle(pid)
+        for name in ('tender.pdf', 'tender.json'):
+            (folder(pid)/name).unlink(missing_ok=True)
+    return Response(status_code=204)
+
+
+@app.get('/api/projects/{pid}/tender/pdf')
+def tender_pdf(pid: str):
+    if not tender_index(pid): raise HTTPException(404, 'No tender summary is linked.')
+    return FileResponse(folder(pid)/'tender.pdf', media_type='application/pdf')
+
+
+@app.get('/api/projects/{pid}/tender/pages/{page}/image')
+def tender_page_image(pid: str, page: int, width: int = 1600, version: str = ''):
+    with LOCK:
+        index = tender_index(pid)
+        if not index or not 1 <= page <= index['page_count']:
+            raise HTTPException(404, 'Tender page not found.')
+        if version and version != index['hash']:
+            raise HTTPException(409, 'This tender summary has been replaced. Reopen the current document.')
+        with PDF_LOCK, fitz.open(folder(pid)/'tender.pdf') as doc:
+            sheet = doc[page-1]
+            scale = min(max(240, min(width, 2400))/sheet.rect.width, 3200/sheet.rect.height)
+            data = sheet.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False).tobytes('png')
+    return Response(data, media_type='image/png', headers={'Cache-Control': 'no-store'})
+
 
 app.mount('/',StaticFiles(directory=ROOT/'frontend',html=True),name='frontend')

@@ -1,5 +1,109 @@
 # Drawing Atlas — upload-first AI directory
 
+## Tender summary: three-document questions
+
+Each project can now link a tender summary PDF alongside its drawing set and technical
+specification. Add it through **Add tender summary PDF** in the sidebar or project overview.
+Upload and match review run locally with no model request. Questions use the existing paid
+AI connection and streaming flow.
+
+The tender index preserves each recognized table row's original wording, page, source
+rectangle, item number, material code, description, unit, quantity, rate, amount and location
+where those columns exist. It recognizes English column headings. Values stay as printed.
+Unrecognized layouts fall back to text blocks requiring review; commercial columns are not
+guessed. Image-only scans are reported as unreadable: this feature does not add OCR. A
+searchable PDF is needed for extraction. Always compare extracted rows with the source.
+
+Matching has two paths in the same system:
+
+- **Confirmed automatically:** one exact code plus compatible specification-title wording,
+  with no detected dimension, colour, application or finish conflict.
+- **Suggested / ambiguous:** description overlap, incomplete extraction, uncertain identity,
+  or multiple codes. These remain untrusted relationships until reviewed.
+- **Conflict:** a printed code matches but available descriptions or attributes disagree.
+- **Unmatched:** no candidate, no coded specification, or a reviewer explicitly left it unmatched.
+
+Suggestions currently compare the description with coded specification item titles. Available
+dimensions, colour, application and finish help flag conflicts; these are conservative rules,
+not an exhaustive comparison of every specification property. Brand, location and units are
+not independent reliable identifiers across all three files. Match reasons are shown instead
+of an uncalibrated confidence percentage. Materials use the existing specification codes;
+there is no duplicate master material database.
+
+In **Review matches**, search/filter rows and use **View source row** to inspect the PDF.
+Expand **Review / choose materials** or **Change link** to choose one or more specification
+items. **Confirm selected** saves the relationship. **Leave unmatched** overrides automatic
+matching. **Reset to automatic** removes that override. Multiple selected codes describe a
+grouped row; its quantity is never automatically split or counted once per code. Printed
+codes found on other drawing pages are listed as text occurrences, not proof of installation.
+
+Questions still use only the selected drawing sheet. The server adds relevant tender rows
+and specification excerpts. Confirmed tender links can help retrieve the corresponding
+specification pages. Unconfirmed rows can be discussed as tender entries, but must not be
+presented as established matches. `[Tender rN]` citations and **From the tender summary**
+cards open the source page with the extracted row highlighted. Quoted text is checked against
+the supplied row. Prices and quantities belong to that row, not automatically to the selected
+drawing or an individual material in a group.
+
+Replacing/removing documents or editing matches changes answer context. Old conversations
+remain readable; outdated tender citations stop opening, and repeated questions offer a
+saved-answer/new-answer choice instead of silently reusing old evidence. Replacing a PDF
+with identical bytes preserves decisions. Replacing the specification makes manual decisions
+require review again. Index/matcher versions also participate in context identity.
+
+### Try the feature
+
+1. Run `stop.bat`, then `start.bat`, and refresh http://127.0.0.1:8000
+   (Ctrl+F5 if the new controls do not appear). Open your existing project.
+2. Ensure the technical specification is linked. Choose **Add tender summary PDF** and
+   select your tender PDF. Check the extracted row count and any extraction warnings.
+3. Open **Review matches**. Find a material code shared by your documents. Expect a
+   compatible exact-code row to be confirmed; click **View source row** and verify the
+   description, unit, quantity, rate and amount against the PDF.
+4. Find a row without a code. Expect a suggestion, ambiguity or unmatched status. Choose
+   its correct specification material and press **Confirm selected**. Close/reopen review
+   (or refresh the browser) and verify that the reviewed link persists.
+5. Open a drawing through **Ask drawings**. Ask, replacing FF-06 with a real code:
+   “Compare FF-06 across this drawing, the technical specification and the tender summary.
+   Quote its tender quantity and unit, and identify any conflicts.” This step uses AI credits.
+   Check the tender and specification citations against their source pages. A tender row total
+   must not be presented as the quantity on this drawing without supporting evidence.
+6. Repeat the identical question immediately. With unchanged context, expect **Saved answer
+   reused, no extra cost**.
+7. Return to review, change that row to **Leave unmatched**, then reopen the conversation.
+   Expect the old tender citation to be marked outdated. Repeat the question: expect the
+   saved/new choice. **Get a new answer** must describe the missing confirmed relationship.
+8. Confirm the correct match again. Try a grouped row or conflicting description: it should
+   need review and must not divide its quantity automatically.
+9. To check replacement/removal, use a test project or keep your original PDF available.
+   Replace the tender with a different PDF, or remove it. Old chat text should remain and
+   tender citations should become outdated. New questions should reflect the current files.
+
+The feature is verified with synthetic PDFs, API tests and a mocked-AI browser walkthrough.
+Real tender layouts and model-generated answers still need the source checks above.
+
+### Files and tests
+
+New source files: `backend/tender.py`, `frontend/tender.js`, `frontend/tender.css`,
+`tests/test_tender.py`. Integrations are in `backend/main.py`, `backend/chat.py`,
+`frontend/chat.js`, and `frontend/index.html`.
+
+Runtime data stays under the existing `data/<project-id>/` directory: `tender.pdf` is the
+source, and `tender.json` holds extracted rows and reviewed relationships. Existing
+`chats.json`/`answers.json` retain tender citations and context identities. No new database
+or dependency is required. Use the app's **Remove** action to remove a tender attachment.
+
+Run offline regression checks from the project directory:
+
+```powershell
+.venv\Scripts\python.exe -m unittest discover -s tests -v
+node --check frontend/tender.js
+node --check frontend/chat.js
+```
+
+Tests use temporary projects and mocked AI responses; they do not read or modify your
+saved project documents or make paid requests.
+
 ## Ask about one sheet
 
 Choose **Ask drawings** in navigation and open a sheet, or open any drawing and

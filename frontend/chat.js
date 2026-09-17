@@ -65,12 +65,14 @@ async function removeSpec(){
  finally{refreshSpecViews()}
 }
 function refreshSpecViews(){
+ if(typeof refreshTenderState==='function')refreshTenderState();
  renderSpecNav();
- const panel=document.querySelector('#specPanel');if(panel)panel.outerHTML=specPanelHtml();
+ const panel=document.querySelector('#specPanel');if(panel)panel.outerHTML=specificationPanelHtml();
  if(askStudio.open){if(askUi.doc&&!projectSpec())showDrawing();renderStudio()}
 }
 // Sidebar entry under the project picker.
 function renderSpecNav(){
+ if(typeof renderTenderNav==='function')renderTenderNav();
  const nav=$('#specNav');if(!nav)return;
  nav.hidden=!project;if(!project){nav.innerHTML='';return}
  const spec=projectSpec();
@@ -83,6 +85,9 @@ function renderSpecNav(){
 }
 // Card on the project overview.
 function specPanelHtml(){
+ return specificationPanelHtml()+(typeof tenderPanelHtml==='function'?tenderPanelHtml():'');
+}
+function specificationPanelHtml(){
  const spec=projectSpec();
  if(specUi.uploading)return `<section id="specPanel" class="spec-panel is-busy"><span class="spec-panel-icon"><span class="spinner" aria-hidden="true"></span></span><div><h3>Reading your technical specification…</h3><p>This happens on this computer and nothing is sent to the AI. A long file can take a minute or two.</p></div></section>`;
  if(!spec)return `<section id="specPanel" class="spec-panel"><span class="spec-panel-icon">${ICON.book}</span><div><h3>Add the project’s technical specification</h3><p>The “how to work” PDF for this project. Once added, the AI refers to it for every question about these drawings. It finds the matching pages through codes like FF-06 and explains what to use and how to do the work.</p>${specUi.error?`<p class="spec-error">${esc(specUi.error)}</p>`:''}</div><button type="button" class="primary" data-spec-action="upload">${ICON.upload}<span>Add specification PDF</span></button></section>`;
@@ -391,12 +396,13 @@ function formatAnswer(text,turn=null,linked=false){
   list.items.push(`<li>${cite(esc(item[2]))}</li>`);
  }
  flushPara();flushList();
- return sections.map(({title,parts})=>{
+ const formatted=sections.map(({title,parts})=>{
   const body=(title?`<h4>${cite(esc(title))}</h4>`:'')+parts.join('');
   if(/^conflicts?\b/i.test(title))return `<div class="prose-callout is-alert">${body}</div>`;
   if(/^not covered\b/i.test(title))return `<div class="prose-callout is-note">${body}</div>`;
   return body;
  }).join('');
+ return typeof tenderInlineCitations==='function'?tenderInlineCitations(formatted,turn):formatted;
 }
 
 function renderStudio(){
@@ -421,7 +427,8 @@ function renderStudioHelp(state){
  if(!askUi.help)return;
  panel.innerHTML=`<div class="help-head"><h2>How it works</h2><button type="button" class="icon-button" data-action="help" aria-label="Close">${ICON.close}</button></div>
  <ul>
-  <li>Only this drawing${projectSpec()?' and the matching pages of your technical specification are':' is'} sent to the AI. Other drawings are never used, even if this one mentions them.</li>
+  <li>This drawing, matching specification pages when available, and relevant tender rows when linked are sent to the AI. Other drawings are never used, even if this one mentions them.</li>
+  ${typeof projectTender==='function'&&projectTender()?'<li>Your tender summary is included. Review matches in the sidebar to confirm uncertain relationships. Tender citations open the original row; quantities belong to tender rows, not automatically to this drawing.</li>':''}
   ${projectSpec()?`<li>Your specification <b>${esc(projectSpec().filename)}</b> is linked. For each question, this computer finds the pages that match the codes on this drawing (like FF-06) and the words you use, and sends only those.</li>
   <li>Choose a card under <b>From the specification</b>, or a <b>Spec p.</b> tag, to read that page on the left.</li>
   <li>Answers list <b>Conflicts to resolve</b> where the drawing and specification disagree, and measurements that could not be found in the documents are flagged under <b>Check before use</b>. Always confirm with the designer before building.</li>`:'<li>No technical specification is added to this project yet. Add it in the sidebar, under the project name, and answers will also explain how to do the work.</li>'}
@@ -462,7 +469,7 @@ function studioHero(locked){
  return `<div class="hero">
  <span class="hero-icon">${ICON.spark}</span>
  <h2>What would you like to know?</h2>
- <p>Ask in your own words. I read only this drawing${specOn?' and the matching pages of your technical specification':''}, and I’ll point to the places I’m talking about.</p>
+ <p>Ask in your own words. I read this drawing${specOn?', matching specification pages':''}${typeof projectTender==='function'&&projectTender()?', and relevant tender summary rows':''}, and I’ll point to the sources.</p>
  <h3 class="visually-hidden">Suggested questions</h3>
  <div class="suggestions">${prompts.map(([q,icon])=>`<button type="button" data-action="prompt" data-prompt="${esc(q)}"><span class="suggestion-icon">${ICON[icon]}</span><span>${esc(q)}</span></button>`).join('')}</div>
  <p class="hero-note">Choosing one only fills in the question box. Nothing is sent until you press Ask.</p>
@@ -489,6 +496,7 @@ function answerBlock(state,i,question,locked){
  ${unverified.length?`<p class="qa-check">${ICON.alert}<span><b>Check before use:</b> ${unverified.map(esc).join(', ')} ${unverified.length===1?'was':'were'} not found in the drawing or specification text that was read.</span></p>`:''}
  ${placed.length?`<section class="places"><div class="places-head"><h3>Where to look</h3><p>Choose one to find it on the drawing${own?'':` · same places as answer ${answerNumber(owner)}`}</p></div><div class="places-grid">${placed.map(card).join('')}</div></section>`:''}
  ${refs.length?`<section class="spec-refs"><div class="places-head"><h3>From the specification</h3><p>${linked?`Choose one to read the page${own?'':` · same pages as answer ${answerNumber(owner)}`}`:projectSpec()?'The linked specification has changed since this answer':'No specification is linked now'}</p></div><div class="spec-list">${refs.map(specCard).join('')}</div></section>`:''}
+ ${typeof tenderCitationsHtml==='function'?tenderCitationsHtml(state.turns[owner],owner):''}
  ${unplaced.length?`<p class="qa-also">Also mentioned, not outlined: ${[...new Set(unplaced.map(s=>s.label))].map(esc).join(', ')}</p>`:''}
  <div class="qa-foot">
   ${own&&sources.length?`<label class="switch"><input type="checkbox" role="switch" data-filter="${i}" ${shown?'checked':''} ${locked?'disabled':''}><span class="switch-track" aria-hidden="true"></span><span>Show on drawing</span></label>
@@ -534,7 +542,7 @@ const thinkingBlock=withSpec=>`<div class="thinking" role="status">${assistantLi
 function choiceCard(choice,locked){
  return `<section class="notice" aria-labelledby="choiceTitle">
  <h3 id="choiceTitle">You’ve asked this before</h3>
- <p>There’s a saved answer, but something has changed since then, such as which answers are shown on the drawing. Nothing has been sent to the AI yet.</p>
+ <p>${esc(choice.reason||'There is a saved answer, but the documents, material matches or conversation context changed. No AI request has been sent.')}</p>
  <blockquote>${esc(choice.previous_answer)}</blockquote>
  <div class="notice-actions"><button type="button" class="primary" data-action="use-previous" ${locked?'disabled':''}><span>Use saved answer</span><small>Free</small></button><button type="button" data-action="fresh-previous" ${locked?'disabled':''}><span>Get a new answer</span><small>Uses AI credits</small></button></div>
  <button type="button" class="link-button" data-action="dismiss-choice">Cancel and edit my question</button>

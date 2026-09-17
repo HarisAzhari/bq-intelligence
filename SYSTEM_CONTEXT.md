@@ -1,5 +1,31 @@
 # Drawing Atlas: system context
 
+## Tender summary extension
+
+- `backend/tender.py` extracts recognized PDF table rows with exact printed fields and
+  page rectangles; unknown layouts become review-required text blocks. Scanned pages are
+  flagged, not OCRed. Matching reuses coded `spec.json` items rather than a second registry.
+- One compatible exact code can auto-confirm identity. Description suggestions, grouped
+  codes and detected conflicts require review. A manual decision can confirm several codes,
+  leave a row unmatched, or reset it to automatic. Quantities remain owned by tender rows.
+- `GET/POST/DELETE /api/projects/{id}/tender` reads/uploads/removes the attachment.
+  `PATCH .../tender/rows/{row_id}` applies a decision with an expected context hash.
+  `GET .../tender/pdf` and `GET .../tender/pages/{page}/image` expose original evidence.
+  Image requests can supply `version` to reject a replaced source.
+- `data/<project-id>/tender.pdf` and `tender.json` store source, row index and decisions.
+  Decisions are tied to specification identity; changed specs require another review.
+- Questions select tender rows with a bounded text budget alongside existing specification
+  retrieval. Confirmed row codes can guide specification retrieval. Only the selected
+  drawing is supplied as drawing evidence; other drawing pages remain outside chat scope.
+- `tender_hash` and `tender_context` are saved on answers. Context covers tender hash,
+  extraction version, matcher version, specification identity and all review decisions.
+  Both generated cache keys and conversation-based reuse check this context. Old explicit
+  answer reuse remains possible, with its original identity and outdated citations.
+- `frontend/tender.js`/`tender.css` add upload, searchable/paginated review, grouped selection,
+  source-page highlighting and citations. Overview controls remain available on small screens.
+- `tests/test_tender.py` provides offline temporary-PDF/API/cache regressions. See the
+  README's “Try the feature” section for the user acceptance walkthrough.
+
 Attribution: made by Meeloiced sama
 
 ## Current status
