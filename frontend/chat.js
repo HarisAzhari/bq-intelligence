@@ -28,7 +28,70 @@ const ICON={
  ruler:svg('<path d="M3 16.5 16.5 3 21 7.5 7.5 21 3 16.5Z"/><path d="m7 12.5 2 2M10 9.5l2 2M13 6.5l2 2"/>'),
  pencil:svg('<path d="M4 20h4L19 9l-4-4L4 16v4Z"/><path d="m13.5 6.5 4 4"/>'),
  notes:svg('<path d="M6 3.5h9l3.5 3.5v13.5H6z"/><path d="M9 11h6M9 14.5h6M9 18h3.5"/>'),
+ book:svg('<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 0 6.5 23H20v-5M8 7.5h8M8 11h5"/>'),
+ upload:svg('<path d="M12 16V4M6.5 9.5 12 4l5.5 5.5M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/>'),
+ prev:svg('<path d="m15 6-6 6 6 6"/>'),
+ next:svg('<path d="m9 6 6 6-6 6"/>'),
 };
+
+// Technical specification ("how to work" PDF) linked to the project; indexed on the server without AI.
+const specInput=Object.assign(document.createElement('input'),{type:'file',accept:'application/pdf,.pdf',hidden:true});
+document.body.append(specInput);
+const specUi={uploading:false,error:''};
+const projectSpec=()=>project?.spec||null;
+const specImage=(page,width)=>`${base()}/spec/pages/${page}/image?width=${width}&v=${projectSpec()?.hash.slice(0,12)||''}`;
+// References written against a different or removed specification no longer open.
+const specCurrent=turn=>!!projectSpec()&&turn?.spec_hash===projectSpec().hash;
+function chooseSpecFile(){if(!specUi.uploading&&project)specInput.click()}
+specInput.addEventListener('change',()=>uploadSpec(specInput.files[0]));
+async function uploadSpec(file){
+ if(!file||!project)return;
+ if(!file.name.toLowerCase().endsWith('.pdf')){toast('Choose the specification as a PDF file.');specInput.value='';return}
+ const pid=project.id;
+ specUi.uploading=true;specUi.error='';refreshSpecViews();
+ try{
+  const data=new FormData();data.append('file',file);
+  const spec=await api(`/api/projects/${pid}/spec`,{method:'POST',body:data});
+  if(project?.id===pid){project.spec=spec;toast(`Specification linked: ${spec.item_count} coded items found in ${spec.page_count} pages.`)}
+ }catch(e){specUi.error=e.message;toast(e.message)}
+ finally{specUi.uploading=false;specInput.value='';refreshSpecViews()}
+}
+async function removeSpec(){
+ const spec=projectSpec();if(!spec)return;
+ if(!confirm(`Remove “${spec.filename}” from this project?\n\nSaved answers stay, but their specification pages will no longer open.`))return;
+ const pid=project.id;
+ try{await api(`/api/projects/${pid}/spec`,{method:'DELETE'});if(project?.id===pid)project.spec=null;toast('Specification removed from this project.')}
+ catch(e){toast(e.message)}
+ finally{refreshSpecViews()}
+}
+function refreshSpecViews(){
+ renderSpecNav();
+ const panel=document.querySelector('#specPanel');if(panel)panel.outerHTML=specPanelHtml();
+ if(askStudio.open){if(askUi.doc&&!projectSpec())showDrawing();renderStudio()}
+}
+// Sidebar entry under the project picker.
+function renderSpecNav(){
+ const nav=$('#specNav');if(!nav)return;
+ nav.hidden=!project;if(!project){nav.innerHTML='';return}
+ const spec=projectSpec();
+ let body;
+ if(specUi.uploading)body=`<div class="spec-nav-item is-busy" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span class="spec-nav-text"><strong>Reading specification…</strong><small>On this computer, no AI</small></span></div>`;
+ else if(!spec)body=`<button type="button" class="spec-nav-add" data-spec-action="upload">${ICON.plus}<span>Add how-to-work PDF</span></button>`;
+ else body=`<div class="spec-nav-item"><span class="spec-nav-icon">${ICON.book}</span><span class="spec-nav-text"><strong title="${esc(spec.filename)}">${esc(spec.filename.replace(/\.pdf$/i,''))}</strong><small>${spec.page_count} pages · ${spec.item_count} items</small></span></div>
+  <div class="spec-nav-actions"><a href="${base()}/spec/pdf" target="_blank" rel="noopener">Open</a><button type="button" data-spec-action="upload">Replace</button><button type="button" data-spec-action="remove">Remove</button></div>`;
+ nav.innerHTML=`<div class="project-label">SPECIFICATION</div>${body}`;
+}
+// Card on the project overview.
+function specPanelHtml(){
+ const spec=projectSpec();
+ if(specUi.uploading)return `<section id="specPanel" class="spec-panel is-busy"><span class="spec-panel-icon"><span class="spinner" aria-hidden="true"></span></span><div><h3>Reading your technical specification…</h3><p>This happens on this computer and nothing is sent to the AI. A long file can take a minute or two.</p></div></section>`;
+ if(!spec)return `<section id="specPanel" class="spec-panel"><span class="spec-panel-icon">${ICON.book}</span><div><h3>Add the project’s technical specification</h3><p>The “how to work” PDF for this project. Once added, the AI refers to it for every question about these drawings. It finds the matching pages through codes like FF-06 and explains what to use and how to do the work.</p>${specUi.error?`<p class="spec-error">${esc(specUi.error)}</p>`:''}</div><button type="button" class="primary" data-spec-action="upload">${ICON.upload}<span>Add specification PDF</span></button></section>`;
+ return `<section id="specPanel" class="spec-panel is-linked"><span class="spec-panel-icon">${ICON.book}</span><div><h3>Technical specification</h3><p>The AI refers to this for every question about these drawings.</p><p><strong>${esc(spec.filename)}</strong> · ${spec.page_count} page${spec.page_count===1?'':'s'} · ${spec.item_count} coded item${spec.item_count===1?'':'s'} found</p>${spec.blank_pages?`<p class="spec-warn">${spec.blank_pages} page${spec.blank_pages===1?'':'s'} can’t be fully read as text (scans or unusual fonts). When one is needed, the AI is shown a picture of it instead.</p>`:''}${specUi.error?`<p class="spec-error">${esc(specUi.error)}</p>`:''}</div><div class="spec-panel-actions"><a href="${base()}/spec/pdf" target="_blank" rel="noopener">Open PDF</a><button type="button" data-spec-action="upload">Replace</button><button type="button" data-spec-action="remove">Remove</button></div></section>`;
+}
+document.addEventListener('click',e=>{
+ const b=e.target.closest('[data-spec-action]');if(!b)return;
+ if(b.dataset.specAction==='upload')chooseSpecFile();else if(b.dataset.specAction==='remove')removeSpec();
+});
 
 function projectChats(){
  if(!project)return [];
@@ -102,7 +165,7 @@ function regionsHtml(state){
  }).join('');
 }
 function updateHighlightToggles(state){
- const any=state.turns.some(t=>t.sources?.some(hasBox));
+ const any=state.turns.some(t=>t.sources?.some(hasBox))||(askStudio.open&&specMarks(state).length>0);
  document.querySelectorAll('.highlight-toggle').forEach(t=>{t.hidden=!any;t.setAttribute('aria-pressed',String(showHighlights));t.querySelector('b').textContent=showHighlights?'On':'Off'});
 }
 function toggleHighlights(){showHighlights=!showHighlights;drawHighlights();drawStudioRegions()}
@@ -120,7 +183,7 @@ function drawHighlights(){
 function mountSheetChat(){
  const asked=chatState(chatKey()).turns.filter(t=>t.role==='user').length;
  const cta=document.createElement('button');cta.type='button';cta.className='ask-cta';
- cta.innerHTML=`<span class="ask-cta-icon">${ICON.spark}</span><span class="ask-cta-text"><strong>${asked?'Continue asking about this drawing':'Ask AI about this drawing'}</strong><small>${asked?`${asked} question${asked===1?'':'s'} so far`:'Plain answers that point to the right place on the sheet'}</small></span>${ICON.arrow}`;
+ cta.innerHTML=`<span class="ask-cta-icon">${ICON.spark}</span><span class="ask-cta-text"><strong>${asked?'Continue asking about this drawing':'Ask AI about this drawing'}</strong><small>${asked?`${asked} question${asked===1?'':'s'} so far`:projectSpec()?'Answers use this drawing and your technical specification':'Plain answers that point to the right place on the sheet'}</small></span>${ICON.arrow}`;
  cta.onclick=()=>openAskStudio(currentPage);
  $('#drawingDetails').prepend(cta);
  if(!$('#highlightToggle')){
@@ -141,6 +204,7 @@ askStudio.innerHTML=`<header class="studio-bar">
  <button type="button" class="studio-back" data-action="close">${ICON.back}<span>Back</span></button>
  <div class="studio-heading"><span class="studio-page" id="studioPage"></span><div><h1 id="studioTitle"></h1><p id="studioSub"></p></div></div>
  <div class="studio-actions">
+  <button type="button" class="bar-button" data-action="spec-browse" id="specBrowse" aria-pressed="false" hidden>${ICON.book}<span>Specification</span></button>
   <button type="button" class="bar-button" data-action="help" aria-expanded="false" aria-controls="studioHelp">${ICON.help}<span>How it works</span></button>
   <a class="bar-button" id="studioPdf" target="_blank" rel="noopener">${ICON.external}<span>Original PDF</span></a>
  </div>
@@ -149,13 +213,19 @@ askStudio.innerHTML=`<header class="studio-bar">
 <div class="studio-body">
  <section class="studio-drawing" aria-label="Drawing">
   <div class="studio-canvas" id="studioCanvas"><div class="studio-stage" id="studioStage"><img id="studioImage" alt="" draggable="false"><div class="region-layer" id="studioRegions"></div><div class="region-layer" id="studioPulse"></div></div></div>
+  <div class="doc-bar" id="docBar" hidden>
+   <span class="doc-kind">${ICON.book}<span>Technical specification</span></span>
+   <div class="doc-pager"><button type="button" data-action="spec-prev" aria-label="Previous specification page">${ICON.prev}</button><span id="docPage" aria-live="polite"></span><button type="button" data-action="spec-next" aria-label="Next specification page">${ICON.next}</button></div>
+   <a id="docPdf" target="_blank" rel="noopener">${ICON.external}<span>Open PDF</span></a>
+   <button type="button" class="doc-back" data-action="show-drawing">${ICON.back}<span class="label-long">Back to drawing</span><span class="label-short">Drawing</span></button>
+  </div>
   <div class="canvas-tools">
    <button type="button" data-action="zoom-out" aria-label="Zoom out">${ICON.minus}</button>
    <button type="button" class="zoom-level" data-action="zoom-fit" id="studioZoom" aria-label="Fit whole drawing">Fit</button>
    <button type="button" data-action="zoom-in" aria-label="Zoom in">${ICON.plus}</button>
    <button type="button" class="highlight-toggle" data-action="highlights"><span class="toggle-dot" aria-hidden="true"></span>Highlights <b>On</b></button>
   </div>
-  <p class="canvas-hint">Drag to move around the drawing</p>
+  <p class="canvas-hint">Drag to move around</p>
  </section>
  <section class="studio-thread" aria-label="Questions and answers">
   <div class="thread-scroll" role="log" aria-live="polite" tabindex="0"><div class="thread" id="studioThread"></div></div>
@@ -176,7 +246,8 @@ askStudio.innerHTML=`<header class="studio-bar">
 document.body.append(askStudio);
 const $s=selector=>askStudio.querySelector(selector);
 // View-only state; never saved.
-const askUi={help:false,usage:new Set(),palette:null,sig:'',returnTo:null,zoom:100,dims:null,active:null,leaving:false};
+// doc: null while the drawing is shown, or {page, turn} for a specification page.
+const askUi={help:false,usage:new Set(),palette:null,sig:'',returnTo:null,zoom:100,dims:null,drawDims:null,active:null,leaving:false,doc:null,lastSpecPage:1,afterLoad:null};
 const STUDIO_ZOOMS=[100,150,200,300,400];
 
 function openAskStudio(page){
@@ -184,7 +255,7 @@ function openAskStudio(page){
  askUi.returnTo=$('#viewer').open?'viewer':null;
  if(askUi.returnTo)$('#viewer').close();
  currentPage=page;
- Object.assign(askUi,{help:false,palette:null,sig:'',zoom:100,dims:null,active:null});askUi.usage.clear();
+ Object.assign(askUi,{help:false,palette:null,sig:'',zoom:100,dims:null,drawDims:null,active:null,doc:null,afterLoad:null});askUi.usage.clear();
  const s=project.pages[page-1];
  $s('#studioTitle').textContent=s.title;
  $s('#studioSub').textContent=[s.number,s.discipline].filter(Boolean).join(' · ');
@@ -192,15 +263,18 @@ function openAskStudio(page){
  $s('#studioPdf').href=base()+'/pdf#page='+page;
  const img=$s('#studioImage');img.alt=`${s.title}, page ${page}`;img.src=imageUrl(page,2300);
  if(!askStudio.open){askStudio.showModal();if(!askUi.leaving)history.pushState({askStudio:true},'')}
- applyStudioZoom(false);renderStudio();
+ renderDocBar();applyStudioZoom(false);renderStudio();
  $s('.thread-scroll').scrollTop=0;
  if(matchMedia('(pointer: fine)').matches)$s('#studioQuestion').focus();
 }
-function sheetDims(){const s=project.pages[currentPage-1];return askUi.dims||{w:s.width||1.414,h:s.height||1}}
+function drawingDims(){const s=project.pages[currentPage-1];return askUi.drawDims||{w:s.width||1.414,h:s.height||1}}
+// Shown document: the drawing, or a specification page (A4 portrait until its image loads).
+function viewDims(){return askUi.dims||(askUi.doc?{w:1,h:1.414}:drawingDims())}
 function applyStudioZoom(keepCenter=true){
- const canvas=$s('#studioCanvas'),stage=$s('#studioStage'),d=sheetDims();
+ const canvas=$s('#studioCanvas'),stage=$s('#studioStage'),d=viewDims();
  const fx=(canvas.scrollLeft+canvas.clientWidth/2)/canvas.scrollWidth,fy=(canvas.scrollTop+canvas.clientHeight/2)/canvas.scrollHeight;
- const fit=Math.max(120,Math.min(canvas.clientWidth-56,(canvas.clientHeight-56)*d.w/d.h));
+ const pad=getComputedStyle(canvas),fitW=canvas.clientWidth-parseFloat(pad.paddingLeft)-parseFloat(pad.paddingRight),fitH=canvas.clientHeight-parseFloat(pad.paddingTop)-parseFloat(pad.paddingBottom);
+ const fit=Math.max(120,Math.min(fitW,fitH*d.w/d.h));
  stage.style.aspectRatio=`${d.w} / ${d.h}`;
  stage.style.width=Math.round(fit*askUi.zoom/100)+'px';
  if(keepCenter){canvas.scrollLeft=fx*canvas.scrollWidth-canvas.clientWidth/2;canvas.scrollTop=fy*canvas.scrollHeight-canvas.clientHeight/2}
@@ -216,8 +290,54 @@ function stepStudioZoom(direction){
 function drawStudioRegions(state){
  if(!askStudio.open||!project)return;
  state??=chatState(chatKey());updateHighlightToggles(state);
- $s('#studioRegions').innerHTML=regionsHtml(state);
- setActiveRegion(askUi.active,true);
+ $s('#studioRegions').innerHTML=askUi.doc?specMarksHtml(state):regionsHtml(state);
+ if(!askUi.doc)setActiveRegion(askUi.active,true);
+}
+// Where an answer's quoted specification wording sits on the page being shown.
+function specMarks(state){
+ const doc=askUi.doc;if(!doc||doc.turn==null)return [];
+ const turn=state.turns[highlightOwner(state,doc.turn)];
+ if(!specCurrent(turn))return [];
+ return (turn.spec_refs||[]).filter(r=>r.page===doc.page).flatMap(r=>(r.boxes||[]).filter(box=>hasBox({box})));
+}
+// Unlabelled: a label would cover the neighbouring lines of text.
+function specMarksHtml(state){
+ const marks=showHighlights?specMarks(state):[];if(!marks.length)return '';
+ const color=replyColor(state,highlightOwner(state,askUi.doc.turn));
+ return marks.map(box=>`<div class="region spec-mark" style="${boxStyle(box)};--c:${color}"></div>`).join('');
+}
+function renderDocBar(){
+ const doc=askUi.doc,spec=projectSpec(),pane=$s('.studio-drawing');
+ $s('#docBar').hidden=!doc;
+ pane.classList.toggle('is-spec',!!doc);
+ pane.setAttribute('aria-label',doc?'Technical specification page':'Drawing');
+ $s('#specBrowse').hidden=!spec;
+ $s('#specBrowse').setAttribute('aria-pressed',String(!!doc));
+ if(!doc||!spec)return;
+ $s('#docPage').textContent=`Page ${doc.page} of ${spec.page_count}`;
+ $s('#docPdf').href=`${base()}/spec/pdf#page=${doc.page}`;
+ $s('[data-action="spec-prev"]').disabled=doc.page<=1;
+ $s('[data-action="spec-next"]').disabled=doc.page>=spec.page_count;
+}
+function swapImage(src,alt,then){
+ Object.assign(askUi,{dims:null,zoom:100,active:null,afterLoad:then||null});
+ const img=$s('#studioImage');img.alt=alt;img.src=src;
+ renderDocBar();applyStudioZoom(false);
+ const canvas=$s('#studioCanvas');canvas.scrollTop=0;canvas.scrollLeft=0;
+ $s('#studioPulse').replaceChildren();drawStudioRegions();
+}
+function showSpecPage(page,turn=null,then=null){
+ const spec=projectSpec();if(!spec||!(page>=1&&page<=spec.page_count))return;
+ askUi.lastSpecPage=page;
+ if(askUi.doc?.page===page){askUi.doc.turn=turn;renderDocBar();drawStudioRegions();then?.();return}
+ askUi.doc={page,turn};
+ swapImage(specImage(page,1800),`Technical specification, page ${page}`,then);
+}
+function showDrawing(then=null){
+ if(!askUi.doc){then?.();return}
+ askUi.doc=null;
+ const s=project.pages[currentPage-1];
+ swapImage(imageUrl(currentPage,2300),`${s.title}, page ${currentPage}`,then);
 }
 // Hovering a place in an answer brings its outline forward on the drawing.
 function setActiveRegion(key,force=false){
@@ -247,20 +367,36 @@ function cropStyle(box,W,H){
  const Y=h>H?(H-h)/2:Math.min(Math.max((y0+y1)/2-h/2,0),H-h);
  return `width:${W/w*100}%;left:${-X/w*100}%;top:${-Y/h*100}%`;
 }
-// Plain answer text with simple bullet and numbered lines turned into lists.
-function formatAnswer(text){
- const out=[];let list=null,para=[];
- const flushPara=()=>{if(para.length)out.push(`<p>${para.join('<br>')}</p>`);para=[]};
- const flushList=()=>{if(list)out.push(`<${list.tag}>${list.items.join('')}</${list.tag}>`);list=null};
+// Plain answer text: bullet and numbered lines become lists, short "Title:" lines become
+// headings, and [Spec p.N] tags open that specification page. Conflicts and gaps stand out.
+function formatAnswer(text,turn=null,linked=false){
+ const spec=projectSpec();
+ const cite=html=>html.replace(/\[Spec\s+pp?\.?\s*(\d{1,4})(?:\s*[–-]\s*(\d{1,4}))?\]/gi,(match,first,last)=>{
+  const page=Number(first),label=`Spec p.${first}${last?'–'+last:''}`;
+  return linked&&page>=1&&page<=spec.page_count
+   ?`<button type="button" class="cite" data-action="spec-page" data-page="${page}" data-turn="${turn}" aria-label="Open specification page ${page}">${ICON.book}${label}</button>`
+   :`<span class="cite is-static">${label}</span>`;
+ });
+ const sections=[{title:'',parts:[]}];let list=null,para=[];
+ const add=html=>sections.at(-1).parts.push(html);
+ const flushPara=()=>{if(para.length)add(`<p>${para.join('<br>')}</p>`);para=[]};
+ const flushList=()=>{if(list)add(`<${list.tag}>${list.items.join('')}</${list.tag}>`);list=null};
  for(const raw of String(text).split('\n')){
   const line=raw.trim(),item=line.match(/^(?:[•*–-]\s+|(\d+)[.)]\s+)(.+)$/);
   if(!line){flushPara();flushList();continue}
-  if(!item){flushList();para.push(esc(line));continue}
+  if(!item&&/^[A-Z][^.!?:]{1,46}:$/.test(line)&&line.split(/\s+/).length<=5){flushPara();flushList();sections.push({title:line.slice(0,-1),parts:[]});continue}
+  if(!item){flushList();para.push(cite(esc(line)));continue}
   const tag=item[1]?'ol':'ul';flushPara();
   if(list?.tag!==tag){flushList();list={tag,items:[]}}
-  list.items.push(`<li>${esc(item[2])}</li>`);
+  list.items.push(`<li>${cite(esc(item[2]))}</li>`);
  }
- flushPara();flushList();return out.join('');
+ flushPara();flushList();
+ return sections.map(({title,parts})=>{
+  const body=(title?`<h4>${cite(esc(title))}</h4>`:'')+parts.join('');
+  if(/^conflicts?\b/i.test(title))return `<div class="prose-callout is-alert">${body}</div>`;
+  if(/^not covered\b/i.test(title))return `<div class="prose-callout is-note">${body}</div>`;
+  return body;
+ }).join('');
 }
 
 function renderStudio(){
@@ -272,6 +408,8 @@ function renderStudio(){
  const question=$s('#studioQuestion');if(question.value!==(state.draft||''))question.value=state.draft||'';autoGrow(question);
  const send=$s('.composer-send');send.disabled=locked;
  send.firstElementChild.textContent=state.busy?'Reading…':state.saving?'Saving…':'Ask';
+ const spec=projectSpec();
+ renderDocBar();
  const status=state.saveStatus||'',save=$s('#studioSave');
  save.classList.toggle('is-error',status.startsWith('Save failed'));
  save.textContent=status==='Saved to project'?'✓ Saved':status==='No saved changes yet'?'':status;
@@ -283,7 +421,10 @@ function renderStudioHelp(state){
  if(!askUi.help)return;
  panel.innerHTML=`<div class="help-head"><h2>How it works</h2><button type="button" class="icon-button" data-action="help" aria-label="Close">${ICON.close}</button></div>
  <ul>
-  <li>Only this drawing is sent to the AI. Other sheets are never used, even if this one mentions them.</li>
+  <li>Only this drawing${projectSpec()?' and the matching pages of your technical specification are':' is'} sent to the AI. Other drawings are never used, even if this one mentions them.</li>
+  ${projectSpec()?`<li>Your specification <b>${esc(projectSpec().filename)}</b> is linked. For each question, this computer finds the pages that match the codes on this drawing (like FF-06) and the words you use, and sends only those.</li>
+  <li>Choose a card under <b>From the specification</b>, or a <b>Spec p.</b> tag, to read that page on the left.</li>
+  <li>Answers list <b>Conflicts to resolve</b> where the drawing and specification disagree, and measurements that could not be found in the documents are flagged under <b>Check before use</b>. Always confirm with the designer before building.</li>`:'<li>No technical specification is added to this project yet. Add it in the sidebar, under the project name, and answers will also explain how to do the work.</li>'}
   <li>Outlines on the drawing show where an answer comes from. Dashed outlines are the AI’s best guess and may be slightly off.</li>
   <li>Use <b>Show on drawing</b> to choose which answers are outlined. Your next question focuses on the outlined answers.</li>
   <li>Asking the same question again reuses the saved answer for free. New answers use paid AI credits.</li>
@@ -303,7 +444,7 @@ function renderThread(key,state,locked){
    else if(turns[i].role==='assistant')html+=answerBlock(state,i,'',locked);
    else html+=`<article class="qa">${questionHeading(turns[i].content)}</article>`;
   }
-  if(state.busy)html+=`<article class="qa">${questionHeading(state.pending)}${thinkingBlock()}</article>`;
+  if(state.busy)html+=`<article class="qa">${questionHeading(state.pending)}${streamingBlock(state)}</article>`;
   if(state.previousChoice)html+=`<article class="qa">${questionHeading(state.previousChoice.question)}${choiceCard(state.previousChoice,locked)}</article>`;
   if(state.error)html+=`<article class="qa">${state.failed?questionHeading(state.failed):''}${errorCard(state.error,locked)}</article>`;
  }
@@ -316,11 +457,12 @@ function renderThread(key,state,locked){
 const questionHeading=text=>`<h2 class="qa-question">${esc(text)}</h2>`;
 const assistantLine=extra=>`<div class="qa-by"><span class="qa-avatar" aria-hidden="true">${ICON.spark}</span><span>${extra}</span></div>`;
 function studioHero(locked){
- const prompts=[['Explain this drawing in simple words.','layout'],['What dimensions are shown?','ruler'],['What work is marked on this sheet?','pencil'],['Summarize the notes on this sheet.','notes']];
+ const specOn=!!projectSpec();
+ const prompts=[['Explain this drawing in simple words.','layout'],['What dimensions are shown?','ruler'],specOn?['How do I install the items shown here?','book']:['What work is marked on this sheet?','pencil'],['Summarize the notes on this sheet.','notes']];
  return `<div class="hero">
  <span class="hero-icon">${ICON.spark}</span>
  <h2>What would you like to know?</h2>
- <p>Ask in your own words. I read only this drawing, and I’ll point to the places I’m talking about.</p>
+ <p>Ask in your own words. I read only this drawing${specOn?' and the matching pages of your technical specification':''}, and I’ll point to the places I’m talking about.</p>
  <h3 class="visually-hidden">Suggested questions</h3>
  <div class="suggestions">${prompts.map(([q,icon])=>`<button type="button" data-action="prompt" data-prompt="${esc(q)}"><span class="suggestion-icon">${ICON[icon]}</span><span>${esc(q)}</span></button>`).join('')}</div>
  <p class="hero-note">Choosing one only fills in the question box. Nothing is sent until you press Ask.</p>
@@ -329,7 +471,13 @@ function studioHero(locked){
 function answerBlock(state,i,question,locked){
  const t=state.turns[i],n=answerNumber(i),owner=highlightOwner(state,i),own=owner===i,color=replyColor(state,owner);
  const sources=state.turns[owner]?.sources||[],placed=sources.map((s,k)=>[s,k]).filter(([s])=>hasBox(s)),unplaced=sources.filter(s=>!hasBox(s));
- const shown=state.selected==null||state.selected.includes(i),dims=sheetDims(),usageOpen=askUi.usage.has(i);
+ const shown=state.selected==null||state.selected.includes(i),dims=drawingDims(),usageOpen=askUi.usage.has(i);
+ const refs=state.turns[owner]?.spec_refs||[],linked=specCurrent(state.turns[owner]),unverified=state.turns[owner]?.unverified||[];
+ const specCard=(r,k)=>{
+  const inner=`<span class="spec-thumb">${linked?`<img src="${specImage(r.page,360)}" alt="" loading="lazy">`:ICON.book}</span>
+   <span class="spec-text"><span class="spec-meta">${r.code?`<b>${esc(r.code)}</b>`:''}<span>Page ${r.page}</span></span><strong>${esc(r.title)}</strong>${r.quote?`<q>${esc(r.quote)}</q>`:''}${linked&&r.quote&&!r.verified?'<small class="spec-note">These exact words weren’t found on the page. Please check the page itself.</small>':''}</span>`;
+  return linked?`<button type="button" class="spec-ref" data-action="spec-ref" data-turn="${owner}" data-ref="${k}" aria-label="Open specification page ${r.page}: ${esc(r.title)}">${inner}${ICON.arrow}</button>`:`<div class="spec-ref is-static">${inner}</div>`;
+ };
  const card=([s,k])=>{const crop=cropStyle(s.box,dims.w,dims.h);return `<button type="button" class="place" data-action="locate" data-turn="${owner}" data-source="${k}" data-region-ref="${regionKey(s.box)}" style="--c:${color}">
   <span class="place-crop"><img src="${imageUrl(currentPage,2300)}" alt="" loading="lazy" style="${crop}"></span>
   <span class="place-text"><strong>${esc(s.label)}</strong><small>${kindLabel(s)}</small></span></button>`};
@@ -337,21 +485,52 @@ function answerBlock(state,i,question,locked){
  ${question?questionHeading(question):''}
  ${assistantLine(`Answer ${n}`)}
  ${t.cached?`<p class="qa-free">${ICON.check}Saved answer reused, no extra cost</p>`:''}
- <div class="prose">${formatAnswer(t.content)}</div>
+ <div class="prose">${formatAnswer(t.content,owner,linked)}</div>
+ ${unverified.length?`<p class="qa-check">${ICON.alert}<span><b>Check before use:</b> ${unverified.map(esc).join(', ')} ${unverified.length===1?'was':'were'} not found in the drawing or specification text that was read.</span></p>`:''}
  ${placed.length?`<section class="places"><div class="places-head"><h3>Where to look</h3><p>Choose one to find it on the drawing${own?'':` · same places as answer ${answerNumber(owner)}`}</p></div><div class="places-grid">${placed.map(card).join('')}</div></section>`:''}
- ${unplaced.length?`<p class="qa-also">Also mentioned, not outlined: ${unplaced.map(s=>esc(s.label)).join(', ')}</p>`:''}
+ ${refs.length?`<section class="spec-refs"><div class="places-head"><h3>From the specification</h3><p>${linked?`Choose one to read the page${own?'':` · same pages as answer ${answerNumber(owner)}`}`:projectSpec()?'The linked specification has changed since this answer':'No specification is linked now'}</p></div><div class="spec-list">${refs.map(specCard).join('')}</div></section>`:''}
+ ${unplaced.length?`<p class="qa-also">Also mentioned, not outlined: ${[...new Set(unplaced.map(s=>s.label))].map(esc).join(', ')}</p>`:''}
  <div class="qa-foot">
   ${own&&sources.length?`<label class="switch"><input type="checkbox" role="switch" data-filter="${i}" ${shown?'checked':''} ${locked?'disabled':''}><span class="switch-track" aria-hidden="true"></span><span>Show on drawing</span></label>
   <button type="button" class="swatch-button" data-action="palette" data-turn="${i}" aria-expanded="${askUi.palette===i}" aria-label="Outline color for answer ${n}" ${locked?'disabled':''}><span class="swatch" style="--c:${color}"></span>Color</button>`:''}
   <button type="button" class="link-button" data-action="usage" data-turn="${i}" aria-expanded="${usageOpen}">Cost ${ICON.chevron}</button>
  </div>
  ${own&&askUi.palette===i?`<div class="palette" role="group" aria-label="Outline color for answer ${n}">${HIGHLIGHT_COLORS.map(([c,name])=>`<button type="button" data-action="color" data-turn="${i}" data-color="${c}" aria-pressed="${c===color.toLowerCase()}" ${locked?'disabled':''}><span class="swatch" style="--c:${c}"></span>${name}</button>`).join('')}</div>`:''}
- ${usageOpen?`<div class="qa-usage">${t.cached?'<p>This reply reused a saved answer, so no new tokens were used.</p>':''}${chatUsageHtml(t.usage)}</div>`:''}
+ ${usageOpen?`<div class="qa-usage">${t.cached?'<p>This reply reused a saved answer, so no new tokens were used.</p>':''}${t.spec_pages?.length?`<p>Specification pages read for this answer: ${t.spec_pages.join(', ')}</p>`:''}${chatUsageHtml(t.usage)}</div>`:''}
 </article>`;
 }
-const thinkingBlock=()=>`<div class="thinking" role="status">${assistantLine('Reading this drawing<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>')}
+function streamingBlock(state){
+ return `<div data-stream-wait ${state.streamText?'hidden':''}>${thinkingBlock(state.pendingSpec)}</div><p data-stream-status class="muted" role="status">${esc(state.streamStatus||'Preparing documents…')}</p><div data-stream-answer style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(state.streamText||'')}</div>`;
+}
+async function requestSheetStream(url,body,onEvent){
+ const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+ if(!response.ok){const error=await response.json().catch(()=>({}));throw new Error(error.detail||`Request failed (${response.status})`)}
+ if(!response.body)throw new Error('Streaming is unavailable in this browser.');
+ const reader=response.body.getReader(),decoder=new TextDecoder();
+ let buffer='',result,completed=false;
+ try{
+  while(true){
+   const {done,value}=await reader.read();
+   buffer+=done?decoder.decode():decoder.decode(value,{stream:true});
+   let boundary;
+   while((boundary=buffer.indexOf('\n\n'))!==-1){
+    const frame=buffer.slice(0,boundary);buffer=buffer.slice(boundary+2);
+    const data=frame.split('\n').filter(line=>line.startsWith('data:')).map(line=>line.slice(5).trimStart()).join('\n');
+    if(!data)continue;
+    const event=JSON.parse(data);
+    if(event.event==='error')throw new Error(event.message);
+    if(event.event==='done'){result=event.result;completed=true}
+    else onEvent(event);
+   }
+   if(done)break;
+  }
+ }finally{await reader.cancel().catch(()=>{});reader.releaseLock()}
+ if(!completed)throw new Error('The connection ended before the answer was confirmed. Reload this conversation to check whether it was saved before retrying.');
+ return result;
+}
+const thinkingBlock=withSpec=>`<div class="thinking" role="status">${assistantLine(`Reading this drawing${withSpec?' and the specification':''}<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>`)}
  <div class="skeleton" aria-hidden="true"><i></i><i></i><i></i></div>
- <p class="muted">This can take up to a minute. You can go back and keep browsing; the answer will be saved here.</p></div>`;
+ <p class="muted">${withSpec?'This can take a few minutes: the drawing is checked against the specification before answering.':'This can take up to a minute.'} You can go back and keep browsing; the answer will be saved here.</p></div>`;
 function choiceCard(choice,locked){
  return `<section class="notice" aria-labelledby="choiceTitle">
  <h3 id="choiceTitle">You’ve asked this before</h3>
@@ -382,19 +561,29 @@ async function persistConversation(key){
 async function loadSavedChats(pid){
  const saved=await api(`/api/projects/${pid}/chats`);
  for(const [page,state] of Object.entries(saved))sheetChats.set(pid+':'+page,{...state,draft:'',busy:false,error:'',failed:'',pending:null,saveStatus:'Saved to project'});
- for(const [key,state] of sheetChats)if(key.startsWith(pid+':')&&!saved[key.split(':')[1]]&&state.turns.length)await persistConversation(key);
+ // Browser-only chats are new to the server, so they start from its first revision.
+ for(const [key,state] of sheetChats)if(key.startsWith(pid+':')&&!saved[key.split(':')[1]]&&state.turns.length){state.revision=0;await persistConversation(key)}
  saveChats();
 }
 async function sendSheetQuestion(key,fresh=false,reuseTurn=null){
  const state=chatState(key),question=(state.draft||'').trim();if(state.busy||state.saving||!question)return;
  const pid=project.id,page=currentPage;
- Object.assign(state,{busy:true,error:'',failed:'',pending:question,previousChoice:null,draft:''});askUi.palette=null;renderStudio();
+ Object.assign(state,{busy:true,error:'',failed:'',pending:question,pendingSpec:!!projectSpec(),streamText:'',streamStatus:'Preparing documents…',previousChoice:null,draft:''});askUi.palette=null;renderStudio();
  try{
-  const result=await api(`/api/projects/${pid}/pages/${page}/chat`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question,fresh,reuse_turn:reuseTurn,history:state.turns.slice(-20).map(t=>({role:t.role,content:t.content}))})});
+  const result=await requestSheetStream(`/api/projects/${pid}/pages/${page}/chat/stream`,{question,fresh,reuse_turn:reuseTurn},event=>{
+   if(event.event==='answer'){state.streamText=event.text;state.streamStatus='Writing answer… Citations appear when complete.'}
+   if(event.event==='status')state.streamStatus=event.text;
+   if(project?.id===pid&&currentPage===page&&askStudio.open){
+    const answer=$s('[data-stream-answer]'),status=$s('[data-stream-status]'),wait=$s('[data-stream-wait]');
+    if(answer)answer.textContent=state.streamText;
+    if(status)status.textContent=state.streamStatus;
+    if(wait)wait.hidden=!!state.streamText;
+   }
+  });
   if(result.needs_choice){state.previousChoice={...result,question};return}
   if(result.conversation){state.turns=result.conversation.turns;state.revision=result.conversation.revision}else state.turns.push({role:'user',content:question},{role:'assistant',content:result.answer,usage:result.usage||{},sources:result.sources||[]});state.updated=Date.now();state.saveStatus='Saved to project';saveChats();
  }catch(e){state.error=e.message;state.failed=question;if(!(state.draft||'').trim())state.draft=question}
- finally{state.busy=false;state.pending=null;if(project?.id===pid&&currentPage===page)renderStudio()}
+ finally{state.busy=false;state.pending=null;state.streamText='';state.streamStatus='';if(project?.id===pid&&currentPage===page)renderStudio()}
 }
 
 // Question page events
@@ -410,7 +599,13 @@ askStudio.addEventListener('click',e=>{
   case 'zoom-fit':askUi.zoom=100;applyStudioZoom(false);break;
   case 'highlights':toggleHighlights();break;
   case 'prompt':{state.draft=b.dataset.prompt;renderStudio();const q=$s('#studioQuestion');q.focus();q.setSelectionRange(q.value.length,q.value.length);break}
-  case 'locate':locateInStudio(state.turns[turn]?.sources?.[Number(b.dataset.source)],replyColor(state,turn));break;
+  case 'locate':{const source=state.turns[turn]?.sources?.[Number(b.dataset.source)];showDrawing(()=>locateInStudio(source,replyColor(state,turn)));break}
+  case 'spec-ref':{const ref=state.turns[turn]?.spec_refs?.[Number(b.dataset.ref)];if(ref)showSpecPage(ref.page,turn,()=>ref.boxes?.[0]&&locateInStudio({box:ref.boxes[0]},replyColor(state,turn)));break}
+  case 'spec-page':showSpecPage(Number(b.dataset.page),Number.isInteger(turn)?turn:null);break;
+  case 'spec-prev':showSpecPage(askUi.doc.page-1,askUi.doc.turn);break;
+  case 'spec-next':showSpecPage(askUi.doc.page+1,askUi.doc.turn);break;
+  case 'spec-browse':askUi.doc?showDrawing():showSpecPage(askUi.lastSpecPage);break;
+  case 'show-drawing':showDrawing();break;
   case 'usage':askUi.usage.has(turn)?askUi.usage.delete(turn):askUi.usage.add(turn);renderStudio();break;
   case 'palette':askUi.palette=askUi.palette===turn?null:turn;renderStudio();break;
   case 'color':state.colors={...state.colors,[turn]:b.dataset.color};askUi.palette=null;persistConversation(key);renderStudio();break;
@@ -447,7 +642,9 @@ studioThread.addEventListener('focusin',e=>setActiveRegion(e.target.closest('[da
 studioThread.addEventListener('focusout',()=>setActiveRegion(null));
 $s('#studioImage').addEventListener('load',e=>{
  askUi.dims={w:e.target.naturalWidth,h:e.target.naturalHeight};
+ if(!askUi.doc)askUi.drawDims=askUi.dims;
  applyStudioZoom(false);renderStudio();
+ const next=askUi.afterLoad;askUi.afterLoad=null;next?.();
 });
 // Mouse users can drag to pan and double-click to zoom; touch keeps native scrolling.
 const studioCanvas=$s('#studioCanvas');
@@ -483,7 +680,7 @@ askStudio.addEventListener('cancel',e=>{
 });
 // The question page is a browser history entry, so the browser Back button closes it too.
 askStudio.addEventListener('close',()=>{
- askUi.help=false;
+ askUi.help=false;askUi.doc=null;askUi.afterLoad=null;
  if(history.state?.askStudio){askUi.leaving=true;history.back()}
  const returnTo=askUi.returnTo;askUi.returnTo=null;
  if(!project)return;

@@ -45,6 +45,17 @@ implementation summaries as proof these issues are resolved.
   that page has no saved server conversation.
 - Usage: replies show reported input, output, total tokens and cost, plus totals.
   Missing provider values are unavailable, not assumed zero.
+- Technical specification: one optional per-project PDF, added from the sidebar
+  under the project name or on Project overview, and used for every question.
+  `backend/specs.py` indexes it locally (page text, badge codes such as FF-06,
+  label rows, side-by-side sheets, item sections; unreadable font text dropped).
+  For each question it selects pages by question codes and words, boosted by
+  codes on the drawing, and sends them with the drawing plus a position-based
+  summary of the drawing's code labels. `backend/chat.py` uses high reasoning and
+  strict evidence rules for these answers, asks for `[Spec p.N]` citations and
+  `spec_refs` (checked against the PDF text), removes repeated drawing sources,
+  and flags answer measurements not found in the text read (`unverified`).
+  The question page shows specification pages in its left pane.
 - Answer reuse: the server checks normalized question text and saved context.
   Capitalization and extra whitespace are ignored; paraphrases are not matched.
   Matching answers should avoid a provider call and report zero new usage.
@@ -63,6 +74,8 @@ particular, filters and answer reuse still require debugging in the actual UI.
 - `data/<project-id>/ingestion.json`: persistent generation status.
 - `data/<project-id>/chats.json`: messages, usage, filters, colors and source regions.
 - `data/<project-id>/answers.json`: saved provider answers.
+- `data/<project-id>/spec.pdf`, `spec.json`, `spec-pages/`: linked technical
+  specification, its local index and rendered page images.
 - `data/settings.json`: selected OpenRouter model.
 - `.env`: OpenRouter API key. Do not commit credentials or private project data.
 
@@ -76,31 +89,12 @@ local work. This snapshot does not include a user's local project data.
 - `POST /api/projects/{id}/pages/{page}/chat`: request or reuse a sheet answer.
 - `GET /api/projects/{id}/chats`: restore project conversations.
 - `PUT /api/projects/{id}/pages/{page}/conversation`: save conversation preferences.
-
-## Verification and follow-up
-
-Syntax and mocked checks covered disk restore, page isolation, usage handling,
-duplicate-region handling, context changes and explicit answer reuse. No paid
-provider calls were used during those checks. Full pytest execution was unavailable
-in the workspace environment because pytest was not installed. Visual browser
-verification remains outstanding.
-
-Debug next with a real browser session and controlled provider responses:
-
-1. Repeat a question before and after selecting highlight groups; inspect the
-   actual saved scope, request and response without exposing credentials.
-2. Confirm whether the request returns a reused answer, a choice, or a new call.
-3. Check group ownership, visibility and colors after repeated replies, toggles,
-   project switches and backend restarts.
-4. Verify that failed preference saves are visible and that the UI reflects the
-   server's actual scope.
-5. Preserve isolation between different PDFs, physical pages and conversations.
-
-Do not silently retry paid calls to diagnose these issues.
+- `POST /api/projects/{id}/spec`: add or replace the project's technical specification (no AI).
+- `DELETE /api/projects/{id}/spec`: remove it. `GET …/spec/pdf` and
+  `GET …/spec/pages/{page}/image` serve the file and page images.
 
 ## Running
 
 Use `start.bat` to launch and `stop.bat` to stop the workspace server. Restart the
 backend and refresh the browser after code changes. The default local address is
-http://127.0.0.1:8000. Tests are in `tests/test_chat.py`, `tests/test_app.py` and
-`tests/test_navigation.py`.
+http://127.0.0.1:8000.

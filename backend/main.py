@@ -1,3 +1,4 @@
+import queue
 import base64
 import hashlib
 import json
@@ -15,11 +16,13 @@ import httpx
 import pymupdf as fitz
 from dotenv import load_dotenv, set_key
 from fastapi import FastAPI, HTTPException, UploadFile, File, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from backend.indexer import index_pdf, STAGES, PDF_LOCK
 from backend.ingestion import PipelineError, Paused, atomic
+from backend.specs import VERSION as SPEC_VERSION, index_spec, select_spec, summary as spec_summary_of
 from backend.navigation import NavigationPipeline as Pipeline, NavigationProvider as OpenRouter, VERSION as NAVIGATION_VERSION, usage_metrics
 
 ROOT=Path(__file__).resolve().parent.parent
@@ -141,6 +144,7 @@ async def lifespan(app):
             try: elapsed=max(0,(now-datetime.fromisoformat(state['started_at'])).total_seconds())
             except (KeyError,TypeError,ValueError): elapsed=None
             write_job(path.parent.name,dict(status='interrupted',error='The server restarted. Resume to continue from saved checkpoints.',finished_at=now.isoformat(),duration_seconds=round(elapsed,2) if elapsed is not None else None))
+    threading.Thread(target=upgrade_specs,daemon=True).start()
     yield
 
 app=FastAPI(title='Drawing Atlas',lifespan=lifespan)
@@ -198,6 +202,7 @@ def project(pid:str):
         except (OSError,ValueError,KeyError,TypeError):
             pass
     p['job']=job_state(pid)
+    p['spec']=spec_summary(pid)
     return p
 
 @app.delete('/api/projects/{pid}',status_code=204)
@@ -358,7 +363,7 @@ def analyze(pid:str,page:int):
         save(p)
     return dict(suggestion=result.model_dump(),usage=payload.get('usage',{}))
 
-from backend.chat import Question, Turn, ask_sheet
+from backend.chat import ANSWER_VERSION, Question, Turn, ask_sheet
 
 CHAT_ACTIVE = set()
 
@@ -378,6 +383,53 @@ def normalized_question(value):
 
 @app.post('/api/projects/{pid}/pages/{page}/chat')
 def chat(pid: str, page: int, body: Question):
+    return run_chat(pid, page, body)
+
+
+@app.post('/api/projects/{pid}/pages/{page}/chat/stream')
+def chat_stream(pid: str, page: int, body: Question):
+    sheet(pid, page)
+    events = queue.Queue(maxsize=32)
+    disconnected = threading.Event()
+    def enqueue(value):
+        while not disconnected.is_set():
+            try:
+                events.put(value, timeout=.2)
+                return
+            except queue.Full:
+                continue
+    def emit(event, data):
+        enqueue(dict(event=event, **data))
+    def work():
+        try:
+            emit('status', dict(text='Preparing drawing and specification excerpts…'))
+            emit('done', dict(result=run_chat(pid, page, body, emit)))
+        except HTTPException as exc:
+            emit('error', dict(message=exc.detail))
+        except Exception:
+            emit('error', dict(message='The answer could not finish. Reload the conversation before retrying.'))
+        finally:
+            enqueue(None)
+    def generate():
+        # Continue saving the answer if the browser disconnects; never retry a paid call.
+        threading.Thread(target=work, daemon=True).start()
+        try:
+            while True:
+                try:
+                    event = events.get(timeout=10)
+                except queue.Empty:
+                    yield ': keep-alive\n\n'
+                    continue
+                if event is None:
+                    break
+                yield 'data: ' + json.dumps(event, ensure_ascii=True) + '\n\n'
+        finally:
+            disconnected.set()
+    return StreamingResponse(generate(), media_type='text/event-stream',
+        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+
+def run_chat(pid: str, page: int, body: Question, emit=None):
     p, s = sheet(pid, page)
     if not body.question.strip(): raise HTTPException(400, 'Enter a question.')
     identity = (pid, page)
@@ -395,6 +447,8 @@ def chat(pid: str, page: int, body: Question):
                 dict(reply=i, sources=state['turns'][i].get('sources', []))
                 for i in sorted(set(selected)) if 0 <= i < len(state['turns']) and state['turns'][i].get('role') == 'assistant'])
             history = [dict(role=t['role'], content=t['content']) for t in state['turns']]
+            spec = spec_index(pid) if body.use_spec else None
+            spec_hash = spec['hash'] if spec else None
             # Only immediately repeated exchanges may be removed. Intervening context
             # changes force a fresh request, including ambiguous follow-up questions.
             while len(history) >= 2 and history[-1]['role'] == 'assistant' and history[-2]['role'] == 'user' and normalized_question(history[-2]['content']) == normalized_question(body.question):
@@ -403,7 +457,8 @@ def chat(pid: str, page: int, body: Question):
             context_key = hashlib.sha256(json.dumps(history, sort_keys=True).encode()).hexdigest()
             cache_key = hashlib.sha256(json.dumps(dict(version=1, pdf=fingerprint, page=page,
                 conversation=state['conversation_id'], model=current_model(), question=normalized_question(body.question),
-                scope=scope, history=history), sort_keys=True).encode()).hexdigest()
+                scope=scope, history=history, answer_version=ANSWER_VERSION,
+                **({'spec': spec_hash} if spec_hash else {})), sort_keys=True).encode()).hexdigest()
             cache_path = folder(pid)/'answers.json'
             cache = json.loads(cache_path.read_text(encoding='utf8')) if cache_path.exists() else {}
             hit = None
@@ -419,16 +474,18 @@ def chat(pid: str, page: int, body: Question):
             elif not body.fresh:
                 for i in reversed(candidates):
                     t = state['turns'][i]
-                    if t.get('scope') == scope and t.get('context_key') == context_key and t.get('pdf_hash') == fingerprint and t.get('model') == current_model():
+                    if (t.get('scope') == scope and t.get('context_key') == context_key and t.get('pdf_hash') == fingerprint
+                            and t.get('model') == current_model() and t.get('spec_hash') == spec_hash
+                            and t.get('answer_version', 1) == ANSWER_VERSION):
                         source_turn = i
                         break
                 if source_turn is None and candidates:
                     i = candidates[-1]
                     return dict(needs_choice=True, previous_turn=i, previous_answer=state['turns'][i]['content'],
-                        reason='A previous answer exists, but its scope, conversation context, model or saved verification details differ. No AI request was sent.')
+                        reason='A previous answer exists, but its scope, conversation context, model, technical specification, answer rules or saved verification details differ. No AI request was sent.')
             if source_turn is not None:
                 previous = state['turns'][source_turn]
-                hit = dict(answer=previous['content'], sources=[],
+                hit = dict(answer=previous['content'], sources=[], spec_refs=[], unverified=[],
                     usage=previous.get('original_usage') if previous.get('cached') else previous.get('usage', {}))
         if hit:
             result = dict(hit, cached=True, original_usage=hit.get('usage', {}),
@@ -436,8 +493,11 @@ def chat(pid: str, page: int, body: Question):
         else:
             if not ready(): raise HTTPException(400, 'Add an OpenRouter key in AI settings first.')
             request = body.model_copy(update={'scope':scope, 'history':[Turn(**t) for t in history[-20:]]})
+            extra = dict(spec=select_spec(spec, folder(pid)/'spec.pdf', s['text'], body.question, history,
+                                          drawing=(folder(pid)/'source.pdf', page))) if spec else {}
+            if emit: extra['emit'] = emit
             result = ask_sheet(folder(pid)/'source.pdf', page, s['text'], request,
-                             os.environ['OPENROUTER_API_KEY'].strip(), current_model())
+                             os.environ['OPENROUTER_API_KEY'].strip(), current_model(), **extra)
             result['cached'] = False
         with LOCK:
             saved = read_chats(pid)
@@ -447,6 +507,10 @@ def chat(pid: str, page: int, body: Question):
                 atomic(cache_path, cache)
             state['turns'].extend([dict(role='user', content=body.question),
                 dict(role='assistant', content=result['answer'], sources=result.get('sources', []), usage=result.get('usage', {}),
+                     spec_refs=result.get('spec_refs', []), spec_pages=result.get('spec_pages', []),
+                     unverified=result.get('unverified', []),
+                     answer_version=state['turns'][source_turn].get('answer_version', 1) if source_turn is not None else ANSWER_VERSION,
+                     spec_hash=state['turns'][source_turn].get('spec_hash') if source_turn is not None else spec_hash,
                      cached=result['cached'], original_usage=result.get('original_usage'),
                      highlight_ref=highlight_owner(state['turns'], source_turn) if source_turn is not None else None,
                      scope=state['turns'][source_turn].get('scope') if source_turn is not None else scope,
@@ -495,5 +559,109 @@ def save_conversation(pid: str, page: int, body: SavedChat):
         saved[str(page)] = value
         atomic(folder(pid)/'chats.json', saved)
         return value
+
+SPEC_CACHE = {}
+SPEC_ACTIVE = set()
+
+def spec_index(pid):
+    path = folder(pid)/'spec.json'
+    try: stamp = path.stat().st_mtime_ns
+    except FileNotFoundError: return None
+    key = str(path)
+    if SPEC_CACHE.get(key, (None,))[0] != stamp:
+        SPEC_CACHE[key] = (stamp, json.loads(path.read_text(encoding='utf8')))
+    return SPEC_CACHE[key][1]
+
+def spec_summary(pid):
+    spec = spec_index(pid)
+    return spec_summary_of(spec) if spec else None
+
+def upgrade_specs():
+    """Rebuild specification indexes made by an older indexer, from the same PDF, on this computer."""
+    for path in DATA.glob('*/spec.json'):
+        try:
+            old = json.loads(path.read_text(encoding='utf8'))
+            if old.get('version') == SPEC_VERSION: continue
+            index = index_spec(path.parent/'spec.pdf', old.get('filename', 'specification.pdf'))
+            index['uploaded'] = old.get('uploaded', index['uploaded'])
+            with LOCK:
+                current = json.loads(path.read_text(encoding='utf8'))
+                if current.get('hash') == index['hash'] and current.get('version') != SPEC_VERSION:
+                    atomic(path, index)
+        except Exception as exc:
+            print(f'Specification index for {path.parent.name} was not upgraded: {exc}')
+
+def chat_running(pid):
+    return any(active[0] == pid for active in CHAT_ACTIVE)
+
+@app.get('/api/projects/{pid}/spec')
+def get_spec(pid: str):
+    read(pid)
+    return dict(spec=spec_summary(pid))
+
+@app.post('/api/projects/{pid}/spec')
+async def upload_spec(pid: str, file: UploadFile = File(...)):
+    """Link a technical specification. Indexed locally; no AI request is made."""
+    read(pid)
+    if not file.filename or not file.filename.lower().endswith('.pdf'): raise HTTPException(400, 'Choose the specification as a PDF.')
+    with LOCK:
+        if pid in SPEC_ACTIVE: raise HTTPException(409, 'A specification is already being read for this project.')
+        SPEC_ACTIVE.add(pid)
+    target = folder(pid)
+    temp = target/'spec.upload'
+    try:
+        size = 0
+        with temp.open('wb') as out:
+            while chunk := await file.read(1024*1024):
+                size += len(chunk)
+                if size > 300*1024*1024: raise HTTPException(413, 'Maximum specification size is 300 MB.')
+                out.write(chunk)
+        try:
+            index = await run_in_threadpool(index_spec, temp, file.filename)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(400, 'Cannot read this PDF. Check that it is valid and unlocked.') from exc
+        with LOCK:
+            if chat_running(pid): raise HTTPException(409, 'Wait for the current answer before changing the specification.')
+            temp.replace(target/'spec.pdf')
+            atomic(target/'spec.json', index)
+            shutil.rmtree(target/'spec-pages', ignore_errors=True)
+        return spec_summary(pid)
+    finally:
+        temp.unlink(missing_ok=True)
+        await file.close()
+        with LOCK: SPEC_ACTIVE.discard(pid)
+
+@app.delete('/api/projects/{pid}/spec', status_code=204)
+def delete_spec(pid: str):
+    read(pid)
+    target = folder(pid)
+    with LOCK:
+        if pid in SPEC_ACTIVE or chat_running(pid): raise HTTPException(409, 'Wait for the current request before removing the specification.')
+        for name in ['spec.json', 'spec.pdf']: (target/name).unlink(missing_ok=True)
+        shutil.rmtree(target/'spec-pages', ignore_errors=True)
+    return Response(status_code=204)
+
+@app.get('/api/projects/{pid}/spec/pdf')
+def spec_pdf(pid: str):
+    if not spec_index(pid): raise HTTPException(404, 'No technical specification is linked to this project.')
+    return FileResponse(folder(pid)/'spec.pdf', media_type='application/pdf')
+
+@app.get('/api/projects/{pid}/spec/pages/{page}/image')
+def spec_page_image(pid: str, page: int, width: int = 1400):
+    spec = spec_index(pid)
+    if not spec: raise HTTPException(404, 'No technical specification is linked to this project.')
+    if not 1 <= page <= spec['page_count']: raise HTTPException(404, 'Page not found')
+    width = max(200, min(width, 2400))
+    cache = folder(pid)/'spec-pages'/f"{spec['hash'][:12]}-{page}-{width}.png"
+    if not cache.exists():
+        with PDF_LOCK:
+            if not cache.exists():
+                cache.parent.mkdir(exist_ok=True)
+                with fitz.open(folder(pid)/'spec.pdf') as doc:
+                    p = doc[page-1]; scale = min(width/p.rect.width, 3200/p.rect.height)
+                    p.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False).save(cache)
+    return FileResponse(cache, media_type='image/png', headers={'Cache-Control': 'private, max-age=86400'})
 
 app.mount('/',StaticFiles(directory=ROOT/'frontend',html=True),name='frontend')

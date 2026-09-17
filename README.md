@@ -41,7 +41,7 @@ The active pipeline is `backend/navigation.py`. It sends the **complete PDF in o
 
 The result is a compact directory, not 121 individual AI sheet reviews. Local validation requires exactly one record per physical page, valid area keys and valid overview/evidence page numbers. The existing directory UI displays the resulting buttons and source drawing pages immediately. There is no review gate or automatic per-page AI pass. Manual metadata editing remains optional.
 
-DeepSeek stays selected for flow testing. OpenRouter's Mistral OCR file parser handles the whole attachment before model analysis. Its extracted text is preserved, but OpenRouter forwards at most eight OCR images. Consequently small graphical labels or image-only drawings can be missed; this flow does not promise exhaustive visual interpretation. Native PDF-capable models can be added as a separate route later. The old per-sheet implementation remains in `backend/ingestion.py` for compatibility tests and is not the production generation path.
+OpenRouter's Mistral OCR file parser handles the whole attachment before model analysis. Its extracted text is preserved, but OpenRouter forwards at most eight OCR images. Consequently small graphical labels or image-only drawings can be missed; this flow does not promise exhaustive visual interpretation. Native PDF-capable models can be added as a separate route later. The old per-sheet implementation remains in `backend/ingestion.py` for shared utilities and legacy compatibility; directory generation uses `backend/navigation.py`.
 
 ## Cost and recovery
 
@@ -78,8 +78,6 @@ backend/main.py          API, uploads, persistent jobs, configuration and review
 frontend/app.js          Data-driven drawing directory and viewer
 frontend/ingestion.js    Upload screen, connection form, progress and resume UI
 data/<project-id>/       source.pdf, index.json, ingestion.json, AI cache, previews
-tests/test_app.py        API and pipeline tests with simulated provider responses
-tests/browser_fixture.py Isolated browser QA server; never used by start.bat
 ```
 
 - `POST /api/projects` — upload; automatically prepare and generate when configured.
@@ -94,21 +92,46 @@ tests/browser_fixture.py Isolated browser QA server; never used by start.bat
 
 Backup `data/` to retain your sources and work. `.env`, PDFs, caches and local data are ignored by Git. Do not publish the local server: it is a single-user desktop prototype, bound to loopback, without multi-user authentication. Cross-origin browser mutations are rejected. Metadata writes are atomic and PDF operations share a lock. Fonts use Google Fonts with system fallbacks; no PDF content is sent for font loading.
 
-## Verification
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install pytest
-.\.venv\Scripts\python.exe -m pytest -q
-Get-Content -Raw frontend/app.js | node --check
-Get-Content -Raw frontend/ingestion.js | node --check
-```
-
-Tests cover arbitrary naming schemes, automatic upload-to-directory publication, scans, all page rotations, missing definitions, invented links, partial failures, checkpoint reuse, interruption, key handling and preservation of human corrections. Browser QA can use `python -m uvicorn tests.browser_fixture:app --port 8001`; this explicitly simulated provider is separate from production and makes no model calls.
-
 OpenRouter structured-output documentation: https://openrouter.ai/docs/guides/features/structured-outputs
 
 PyMuPDF is distributed under AGPL/commercial licensing; choose the appropriate arrangement before distributing a commercial product.
 
+
+## Technical specification
+
+Each project can have one technical specification ("how to work" PDF). Add it in the
+sidebar under the project name (**Add how-to-work PDF**) or on **Project overview**;
+both also offer Open, Replace and Remove. Once added, every sheet question uses it.
+
+The file is read on this computer without any AI request: page text, item codes (for
+example the circled `FF 06` badge), label rows such as `Product Type : …`, and pages
+that hold two specification sheets side by side. Text from a common broken font encoding
+(every character shifted, for example "WKH" for "the") is decoded; other unreadable text
+is dropped, and those pages are counted as pictures.
+
+For each question, the app picks the relevant specification pages locally and sends
+only those with the drawing: at most 10 pages of text, a compact list of every coded
+item, and at most two pictures of pages that cannot be read as text. Codes on the
+drawing rank pages only when the question is about them, so a general question sends
+just the item list. Limits live at the top of `backend/specs.py`.
+
+Specification questions are answered with extra reasoning (`SPEC_REASONING` in
+`backend/chat.py`) and strict rules: every fact must come from the drawing or the pages
+sent, values are copied as printed, and anything the documents do not give is listed
+under **Not covered by these documents** instead of being filled in. The app also sends a
+summary of the codes printed on the drawing, read by position (legend words beside each
+code, how often it is printed, and its specification item), so the answer can tell legend
+entries from plan callouts. Disagreements between drawing and specification appear under
+**Conflicts to resolve**. After each answer, measurements whose numbers appear nowhere in
+the text that was read are listed under **Check before use**. Always confirm with the
+designer before building.
+
+Answers cite pages as **Spec p.N** tags and list **From the specification** cards; both
+open the page beside the conversation with the quoted wording highlighted. Quotes that
+cannot be found on the page are flagged. Replacing or removing the specification leaves
+earlier answers readable, but their page links stop opening, and a repeated question
+offers the saved answer or a new one. Indexes made by an older version are rebuilt in
+the background when the server starts.
 
 ## Chat filters, storage and saved answers
 
@@ -137,3 +160,22 @@ is in progress. Restart the backend and refresh the browser after upgrading.
 Reused replies reference their original highlight group instead of creating new boxes.
 The viewer draws identical saved page regions once, while keeping distinct regions separate.
 Older replies without verification metadata require an explicit reuse choice.
+
+## Streaming sheet answers
+
+The question interface uses `POST /api/projects/{id}/pages/{page}/chat/stream`.
+It shows preparation status, then answer text as OpenRouter produces it. Citation
+locations, checks and usage are attached after completion; only completed answers
+are saved. The existing JSON chat endpoint remains available. Streaming uses the
+same single model request and retains saved-answer reuse.
+
+Adding a specification identifies its role through the dedicated upload control,
+then indexes it locally without sending an AI prompt. Each new question sends
+selected excerpts and any selected images as input again. Specification questions
+retain high reasoning effort, so there can still be a delay before answer text
+starts. Streaming does not reduce input size or reasoning time.
+
+Leaving the question view does not interrupt generation. If the network disconnects,
+the server continues and saves a successful answer; reload the conversation before
+retrying. Failed or truncated provider streams are not saved as completed answers
+and are never automatically retried.
