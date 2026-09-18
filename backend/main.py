@@ -624,7 +624,8 @@ def spec_summary(pid): return doc_summary(pid, 'spec')
 
 def docs_busy(pid):
     """True while any reference document of this project is being read."""
-    return pid in SPEC_ACTIVE or pid in COST_ACTIVE or pid in TENDER_ACTIVE
+    jobs = globals().get('PROCUREMENT_JOBS')
+    return pid in SPEC_ACTIVE or pid in COST_ACTIVE or pid in TENDER_ACTIVE or bool(jobs and jobs.busy(pid))
 
 def upgrade_specs():
     """Rebuild reference indexes made by an older indexer, from the same PDF, on this computer."""
@@ -874,5 +875,9 @@ def tender_page_image(pid: str, page: int, width: int = 1600, version: str = '')
             data = sheet.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False).tobytes('png')
     return Response(data, media_type='image/png', headers={'Cache-Control': 'no-store'})
 
+
+from backend.procurement import install as install_procurement
+PROCUREMENT_JOBS = install_procurement(app, folder, read, LOCK, lambda pid: pid in SPEC_ACTIVE or pid in COST_ACTIVE or pid in TENDER_ACTIVE or pid in ACTIVE,
+                    lambda: dict(key=os.environ.get('OPENROUTER_API_KEY', '').strip() if ready() else '', model=current_model()))
 
 app.mount('/',StaticFiles(directory=ROOT/'frontend',html=True),name='frontend')

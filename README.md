@@ -283,3 +283,113 @@ Leaving the question view does not interrupt generation. If the network disconne
 the server continues and saves a successful answer; reload the conversation before
 retrying. Failed or truncated provider streams are not saved as completed answers
 and are never automatically retried.
+
+## Procurement: AI BOM and supplier sourcing
+
+Restart the backend with `stop.bat` then `start.bat`, and refresh the browser.
+
+### Walkthrough
+
+1. Upload the drawing set and attach specification, tender summary and cost breakdown.
+   Open **Procurement → Materials BOM → Generate AI BOM**. Confirm the credit notice.
+   AI reads all attached PDFs, builds a draft, then cross-checks it against the originals.
+   The UI shows the stage, elapsed time, heartbeat and cancellation control.
+2. The successful BOM is saved. Viewing, refreshing, searching the table and restoring
+   a saved version do not call AI. Material details are read-only. **View evidence**
+   shows page links, exact source quotes, field confidence, conflicts and AI filter reasons.
+   Unknown quantities, units or costs are not invented. Unresolved requirements block purchasing.
+3. **Regenerate BOM** reuses an identical completed result by document hashes, model and
+   prompt version. After a failed second pass it can reuse the saved draft. Check **Force
+   a fresh analysis** only when you want new paid requests. Document changes mark the
+   old BOM outdated; they do not silently trigger paid regeneration. Changed document sets
+   require full analysis, not an incremental partial update. The previous BOM survives failures.
+4. Open **Find suppliers → Find / resume suppliers** and confirm the credit notice.
+   AI-selected location, company and currency filters come from cited document evidence;
+   unknown filters stay unrestricted. Installation-inclusive budgets do not become price ceilings.
+   Two material searches run at a time. Each result is saved immediately, with batch
+   counts, elapsed time and heartbeat visible. Leaving the page does not cancel work.
+5. Browse one row per material, 20 per page. Search material/company/contact, filter by
+   result status, country or state, and expand only the matches you want to inspect.
+   These are free display filters, not manual AI search settings. Candidate company
+   coverage across multiple materials is summarized. Sourced public business email,
+   telephone and city/state/country appear only when evidence is available.
+6. Resuming reuses completed searches (including no-match outcomes) and retries failed
+   or missing searches. Use **Refresh all supplier results** for a new paid search of
+   saved no-match outcomes or old listings. Cancellation waits for in-flight provider
+   requests; completed work is retained. A server restart marks jobs interrupted,
+   never automatically retries them, and allows explicit resume.
+7. Use **Visit supplier / buy** to continue on the supplier website, or record an actual
+   verified quotation. Compare quotations, add to **Cart**, then create purchase orders.
+   Existing approval, issue, supplier acknowledgement, partial delivery and printable
+   purchase-order workflows remain. The app does not automatically send orders or pay.
+
+### Accuracy and costs
+
+BOM generation uses the configured OpenRouter key/model, with two AI calls plus PDF
+parsing. Supplier discovery uses OpenRouter web search, up to two searches/eight results
+per material request. Large BOMs can consume substantial credits. Reported usage/cost
+is displayed when supplied; failed or cancelled in-flight calls may still be charged.
+There is no automatic paid retry. No paid provider call is part of the offline tests.
+
+AI confidence labels are qualitative, not measured accuracy. Exact quote matching checks
+native PDF text and physical page numbers; it cannot prove semantic correctness. Scanned
+or purely graphical evidence can be read by the provider but remains unverified locally,
+so relevant requirements need attention. This is not guaranteed drawing takeoff.
+Combined PDFs are limited to 100 MB and native text to 1.6 million characters; model
+context limits may be smaller. Oversized requests fail visibly rather than silently
+dropping pages. Different scopes/sizes must remain distinct; duplicate identities fail validation.
+
+Supplier names, prices, locations and contacts require cited returned web evidence.
+Unknown values remain unknown; listings do not prove stock, shipping coverage or current
+pricing. No currency or pack conversion is performed. A web lead is not a verified quote.
+Live model/tool compatibility still needs a user-triggered paid request.
+
+Purchasing remains through a supplier website or manually shared purchase order:
+there is no universal supplier checkout integration or automated payment. Local names
+recorded for approvals are audit fields, not authenticated multi-user authorization.
+Historical purchasing records remain preserved; stale quotations cannot be purchased.
+
+### Files and saved data
+
+```text
+backend/bom.py               AI extraction, validation, source grounding and caching
+backend/procurement_jobs.py  Background jobs, heartbeat, cancel/resume, supplier batching
+backend/procurement.py       Procurement API, saved BOM, quotations, cart and orders
+backend/suppliers.py         Cited web discovery and business contact validation
+frontend/bom.js / bom.css    Read-only BOM, progress, versions and pagination
+frontend/suppliers.js        Material-centric supplier table, filters and contact cards
+frontend/procurement.js      Existing quotation, cart and order workflow
+tests/test_procurement.py   Offline BOM/job/cache/purchasing regression tests
+tests/test_suppliers.py     Offline supplier citation and contact tests
+tests/bom_fixture.py        Synthetic PDF and AI response fixtures
+tests/procurement_preview.py Isolated mocked browser-test server
+tests/procurement_browser.cjs Headless Edge regression, including 105-material layout
+data/<project>/bom.json            Current saved AI BOM
+data/<project>/bom-history.json    Saved version index
+data/<project>/bom-job.json        Persisted BOM progress
+data/<project>/suppliers-job.json  Persisted supplier progress
+data/<project>/supplier-results.json  Per-material saved search results
+data/<project>/ai-cache/bom/       Draft checkpoints and versioned completed BOMs
+data/<project>/ai-cache/suppliers/ Saved per-material search results
+data/<project>/procurement.json   Preserved quotes, cart, orders and audit records
+```
+
+Back up the entire project data directory, including caches needed to restore saved
+versions. Old manual material/review data is retained but is not used as the AI BOM.
+No new application dependency is required.
+
+From the project directory:
+
+```powershell
+.venv\Scripts\python.exe -m unittest discover -s tests -v
+node --check frontend/bom.js
+node --check frontend/suppliers.js
+node --check frontend/procurement.js
+```
+
+Optional browser regression (existing Playwright and Edge required; do not install
+dependencies just for this check): run `.venv\Scripts\python.exe tests/procurement_preview.py`
+in one terminal, then `node tests/procurement_browser.cjs` in another. Set
+`PLAYWRIGHT_MODULE` to the installed Playwright module path if necessary.
+The isolated server binds localhost port 8001, uses temporary data and mocked providers.
+Stop it with Ctrl+C after testing; temporary fixture data is cleaned up.

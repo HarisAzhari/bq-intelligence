@@ -54,6 +54,7 @@ function listBody(){
 }
 function render(){
  if(!project)return;
+ if(route==='procurement'){ $('#crumb').textContent='Procurement';renderProcurement();return; }
  $('#crumb').textContent=area||({overview:'Project overview',drawings:'All drawings',services:'Building services',review:'Review queue',chat:'Ask drawings'}[route]);
  if(route==='overview')$('#main').innerHTML=overview();
  else{
