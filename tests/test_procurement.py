@@ -77,16 +77,16 @@ class ProcurementTests(unittest.TestCase):
         provider.assert_not_called()
         self.assertFalse((self.directory/'procurement-extraction.json').exists())
 
-    def test_two_pass_generation_cache_and_force(self):
+    def test_single_pass_generation_cache_and_force(self):
         with patch.object(bom,'request_ai',side_effect=fixture.provider) as provider:
             self.start();self.assertEqual(self.wait_job()['status'],'complete')
-            self.assertEqual(provider.call_count,2)
+            self.assertEqual(provider.call_count,1)
             first=self.get()['bom']['version']
             self.start();self.assertEqual(self.wait_job()['status'],'complete')
-            self.assertEqual(provider.call_count,2)
+            self.assertEqual(provider.call_count,1)
             self.assertEqual(self.get()['bom']['version'],first)
             self.start(force=True);self.assertEqual(self.wait_job()['status'],'complete')
-            self.assertEqual(provider.call_count,4)
+            self.assertEqual(provider.call_count,2)
             self.assertNotEqual(self.get()['bom']['version'],first)
         self.assertEqual(len(self.get()['bom_history']),2)
         self.assertTrue(self.get()['items'][0]['procurement_ready'])
@@ -106,11 +106,11 @@ class ProcurementTests(unittest.TestCase):
             self.assertEqual(self.wait_job()['status'],'cancelled')
         self.assertEqual(self.get()['bom']['version'],original)
 
-    def test_failed_validation_keeps_saved_bom_and_resumes_draft(self):
+    def test_failed_request_keeps_saved_bom_and_can_resume(self):
         self.review();original=self.view['bom']['version']
-        with patch.object(bom,'request_ai',side_effect=[fixture.provider(),ValueError('Audit failed')]) as provider:
+        with patch.object(bom,'request_ai',side_effect=ValueError('HTTP 400')) as provider:
             self.start();self.assertEqual(self.wait_job()['status'],'failed')
-            self.assertEqual(provider.call_count,2)
+            self.assertEqual(provider.call_count,1)
         self.assertEqual(self.get()['bom']['version'],original)
         with patch.object(bom,'request_ai',side_effect=fixture.provider) as provider:
             self.start();self.assertEqual(self.wait_job()['status'],'complete');self.assertEqual(provider.call_count,1)

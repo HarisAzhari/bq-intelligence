@@ -60,12 +60,17 @@ def state(directory):
     saved.setdefault('searches', [])
     snapshot = load(directory / 'bom.json', None)
     current = bom.manifest(directory)
-    stale = bool(snapshot and snapshot.get('manifest') != current)
+    partial = load(directory / 'bom-progress.json', None)
+    if not snapshot and partial and partial.get('manifest') == current and partial.get('prompt_version') == bom.VERSION:
+        snapshot = partial
+    stale = bool(snapshot and not bom.is_current(snapshot, current))
     items = copy.deepcopy(snapshot.get('items', [])) if snapshot else []
     for item in items:
         item['reviewed'] = False
         if stale:
             item.update(procurement_ready=False, search_ready=False, status='Outdated')
+        elif snapshot.get('partial'):
+            item.update(procurement_ready=False, search_ready=False, status='Partial · needs review')
     records = load(directory / 'supplier-results.json', {})
     return saved, dict(items=items, warnings=(snapshot or {}).get('warnings', []),
         documents={f['kind']: (snapshot or {}).get('documents', {}).get(f['kind'], {}).get('hash', '') for f in current},
@@ -75,7 +80,9 @@ def state(directory):
         bom_history=load(directory / 'bom-history.json', []), supplier_results=records, manifest=current,
         legacy_materials_preserved=bool(saved['manual'] or saved['reviews']),
         estimate=dict(documents=len(current), pages=sum(f['pages'] or 0 for f in current),
-            pdf_mb=round(sum(f['size'] for f in current)/1024/1024, 2), ai_requests=2))
+            pdf_mb=round(sum(f['size'] for f in current)/1024/1024, 2),
+            source_filename=current[0]['filename'] if current else '', max_workers=2,
+            section_bytes=bom.MAX_SECTION_BYTES, max_requests=bom.MAX_SECTIONS))
 
 
 class Strict(BaseModel):

@@ -54,7 +54,9 @@ class Jobs:
                 raise HTTPException(400, 'Add your OpenRouter key in AI settings first.')
             directory = self.folder(pid)
             current = bom.load(directory / 'bom.json', None)
-            if kind == 'suppliers' and (not current or current['manifest'] != bom.manifest(directory)):
+            if kind == 'bom' and not bom.manifest(directory):
+                raise HTTPException(400, 'Add the designated BOQ through Add tender summary PDF first.')
+            if kind == 'suppliers' and not bom.is_current(current, bom.manifest(directory)):
                 raise HTTPException(409, 'Generate a current AI BOM before finding suppliers.')
             event = threading.Event()
             self.active[self.key(pid, kind)] = event
@@ -161,7 +163,7 @@ class Jobs:
                 if result:
                     with self.lock:
                         current = bom.load(directory / 'bom.json', {})
-                        if current.get('version') != snapshot['version'] or current.get('manifest') != bom.manifest(directory):
+                        if current.get('version') != snapshot['version'] or not bom.is_current(current, bom.manifest(directory)):
                             event.set()
                             raise ValueError('BOM or documents changed during supplier search. Completed source-specific results are cached.')
                         records[item['id']] = result

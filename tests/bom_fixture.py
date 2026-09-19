@@ -17,9 +17,9 @@ def pdf(text=TEXT):
 
 
 def bill():
-    return dict(materials=[dict(name='Porcelain floor tile', codes=['FF-06'], specification='600 x 600 mm porcelain floor tile',
+    return dict(materials=[dict(boq_item='1.0', boq_page=1, name='Porcelain floor tile', codes=['FF-06'], specification='600 x 600 mm porcelain floor tile',
         brand='', quantity=100, unit='m2', budget=2000, currency='MYR', location='Kuala Lumpur', category='required',
-        quantity_basis='Explicit total from the tender; source drawing reference is not added.', conflicts=[], resolution='',
+        quantity_basis='Explicit total from the tender; separate locations are not added.', conflicts=[], resolution='',
         confidence_fields=dict(identity='high', specification='high', quantity='high', cost='high'),
         sources=[dict(kind='tender', page=1, quote=TEXT, fields=['name','specification','quantity','unit','budget','currency','location'])],
         search_plan=dict(location='Kuala Lumpur', country='Malaysia', state='', company='', currency='MYR', max_unit_price=None,
@@ -39,10 +39,17 @@ def seed(directory, changes=None):
     snapshot = bom.validate_bill(value, documents)
     snapshot.update(version=bom.uuid_version(), fingerprint='fixture', prompt_version=bom.VERSION, model='test-model', created_at=bom.now(),
         manifest=bom.manifest(directory), documents={k:dict(filename=d['filename'],hash=d['hash'],pages=len(d['pages'])) for k,d in documents.items()},
-        usage=dict(requests=2,tokens=200,reported_cost_usd=.01))
+        usage=dict(requests=1,tokens=100,reported_cost_usd=.005))
     atomic(directory/'bom.json',snapshot)
     return snapshot
 
 
 def provider(*args, **kwargs):
-    return json.dumps(bill()), dict(total_tokens=100,cost=.005)
+    value = bill()
+    if args:
+        payload = json.loads(args[0][0]['text'])
+        records = payload.get('records', [])
+        if records:
+            ref = value['materials'][0]['sources'][0]
+            value['materials'][0]['sources'] = [dict(source_id=records[0]['source_id'], fields=ref['fields'])]
+    return json.dumps(value), dict(total_tokens=100,cost=.005)
