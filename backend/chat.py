@@ -4,6 +4,7 @@ import math
 import re
 from typing import Literal
 import httpx
+from backend import metering
 import pymupdf as fitz
 from backend.indexer import PDF_LOCK
 from pydantic import BaseModel, Field
@@ -264,7 +265,7 @@ def partial_answer(raw):
 
 def stream_completion(payload, key, timeout, emit):
     raw, usage, finish, done, shown = '', {}, None, False, ''
-    with httpx.stream('POST', 'https://openrouter.ai/api/v1/chat/completions',
+    with metering.stream('POST', 'https://openrouter.ai/api/v1/chat/completions',
                       headers={'Authorization': 'Bearer ' + key},
                       json=dict(payload, stream=True), timeout=timeout) as response:
         response.raise_for_status()
@@ -356,7 +357,7 @@ In the answer, call the selected sheet "this drawing"; never write "physical pag
             emit('status', dict(text='Reading the documents and preparing an answer…'))
             response_payload = stream_completion(payload, key, timeout, emit)
         else:
-            response = httpx.post('https://openrouter.ai/api/v1/chat/completions',
+            response = metering.post('https://openrouter.ai/api/v1/chat/completions',
                 headers={'Authorization': 'Bearer ' + key}, json=payload, timeout=timeout)
             response.raise_for_status()
             response_payload = response.json()

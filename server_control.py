@@ -14,7 +14,7 @@ URL='http://127.0.0.1:8000'
 
 def running():
     try:
-        with urllib.request.urlopen(URL+'/api/config',timeout=1) as response:
+        with urllib.request.urlopen(URL+'/api/health',timeout=1) as response:
             return json.load(response)
     except Exception: return None
 

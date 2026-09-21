@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import httpx
+from backend import metering
 from pydantic import Field
 from backend.ingestion import Record, Structure, PipelineError, Paused, GUARD, atomic, strict_schema, validate_structure
 
@@ -84,7 +85,7 @@ class NavigationProvider:
             response_format={'type':'json_schema','json_schema':{'name':'Navigation','strict':True,'schema':strict_schema(Navigation)}},
             max_tokens=48000)
         try:
-            r=httpx.post('https://openrouter.ai/api/v1/chat/completions',headers={'Authorization':'Bearer '+self.key},json=payload,timeout=httpx.Timeout(600,connect=30))
+            r=metering.post('https://openrouter.ai/api/v1/chat/completions',headers={'Authorization':'Bearer '+self.key},json=payload,timeout=httpx.Timeout(600,connect=30))
             r.raise_for_status(); body=r.json()
             if body.get('error'): raise PipelineError('OpenRouter could not analyze the whole PDF. Check model availability and credits, then retry.')
             choice=body['choices'][0]

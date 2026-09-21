@@ -143,6 +143,10 @@ class MatchingTests(unittest.TestCase):
 
 class ApiTests(unittest.TestCase):
     def setUp(self):
+        auth = patch.object(main.accounts, 'identity', return_value={'id':'fixture-user','role':'user'})
+        auth.start(); self.addCleanup(auth.stop)
+        ownership = patch.object(main.accounts, 'can_access_project', return_value=True)
+        ownership.start(); self.addCleanup(ownership.stop)
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.root=Path(self.tmp.name);self.pid='aabbccddeeff';self.folder=self.root/self.pid;self.folder.mkdir()
         self.prefix=f'/api/projects/{self.pid}'
@@ -229,7 +233,7 @@ class ApiTests(unittest.TestCase):
         selected=tender.select_tender(index_fixture(),spec_fixture(),'FF-06','FF-06')
         response={'choices':[{'message':{'content':json.dumps(dict(answer='850 m2 [Tender r1]',sources=[],
                          tender_refs=[dict(row_id='r1',quote='850'),dict(row_id='r999',quote='wrong')]))},'finish_reason':'stop'}], 'usage':{}}
-        with patch.object(chat,'render_inputs',return_value=[]),patch.object(chat.httpx,'post') as request:
+        with patch.object(chat,'render_inputs',return_value=[]),patch.object(chat.metering,'post') as request:
             request.return_value.json.return_value=response
             result=chat.ask_sheet('unused',1,'FF-06',chat.Question(question='FF-06'),'offline','test',tender=selected)
         payload=request.call_args.kwargs['json']

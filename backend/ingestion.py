@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 from typing import Literal
 import httpx
+from backend import metering
 import pymupdf as fitz
 from pydantic import BaseModel, ConfigDict, Field
 from backend.indexer import PDF_LOCK
@@ -128,7 +129,7 @@ class OpenRouter:
         encoded=json.dumps(data,ensure_ascii=False)
         if len(encoded)>240000: raise PipelineError('This document produces too much context for one request. Split into smaller PDFs; saved readings are retained.')
         try:
-            response=httpx.post('https://openrouter.ai/api/v1/chat/completions',headers={'Authorization':'Bearer '+self.key},json=dict(model=self.model,provider={'require_parameters':True},messages=[dict(role='system',content=GUARD+prompt),dict(role='user',content=[dict(type='text',text=encoded)]+(images or []))],response_format=dict(type='json_schema',json_schema=dict(name=cls.__name__,strict=True,schema=strict_schema(cls))),temperature=0,max_tokens=16000 if cls is Structure else 10000),timeout=120)
+            response=metering.post('https://openrouter.ai/api/v1/chat/completions',headers={'Authorization':'Bearer '+self.key},json=dict(model=self.model,provider={'require_parameters':True},messages=[dict(role='system',content=GUARD+prompt),dict(role='user',content=[dict(type='text',text=encoded)]+(images or []))],response_format=dict(type='json_schema',json_schema=dict(name=cls.__name__,strict=True,schema=strict_schema(cls))),temperature=0,max_tokens=16000 if cls is Structure else 10000),timeout=120)
             response.raise_for_status()
             payload=response.json();choice=payload['choices'][0]
             if choice.get('finish_reason')=='length': raise PipelineError('AI reached its output limit. Progress is retained; use a smaller PDF or a model with more output capacity.')

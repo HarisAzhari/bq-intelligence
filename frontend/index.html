@@ -1,20 +1,21 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Drawing Atlas · Project directory</title><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/ingestion.css"><link rel="stylesheet" href="/chat.css"><link rel="stylesheet" href="/cost.css"><script defer src="/app.js"></script><script defer src="/ingestion.js"></script><script defer src="/chat.js"></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>BQ Intelligence · Project directory</title><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/ingestion.css"><link rel="stylesheet" href="/chat.css"><link rel="stylesheet" href="/cost.css"><link rel="stylesheet" href="/account.css"><script defer src="/account.js?v=percent"></script><script defer src="/app.js"></script><script defer src="/ingestion.js"></script><script defer src="/chat.js"></script></head>
 <body>
 <aside class="sidebar">
-  <a class="brand" href="#"><span class="brand-icon">▧</span><span>drawing<span class="brand-light">atlas</span><small>FROM SHEETS TO SPACES</small></span></a>
+  <a class="brand" href="#"><span class="brand-icon">▧</span><span>BQ<span class="brand-light"> Intelligence</span><small>FROM SHEETS TO SPACES</small></span></a>
   <div class="sidebar-scroll">
   <div class="project-label">WORKSPACE</div><select id="projectSelect" aria-label="Choose project"></select><div id="specNav" class="spec-nav" hidden></div><div id="costNav" class="spec-nav" hidden></div>
   <div class="nav-main"><button data-nav="overview" class="nav active"><span>◫</span> Project overview</button><button data-nav="drawings" class="nav"><span>▤</span> All drawings <b id="navCount">—</b></button><button data-nav="chat" class="nav"><span>✧</span> Ask drawings</button><button data-nav="services" class="nav"><span>⌁</span> Building services</button><button data-nav="review" hidden class="nav"><span>◇</span> Review queue <b id="reviewCount">—</b></button></div>
   <div class="project-label area-label">PROJECT AREAS <span id="areaCount"></span></div><div id="areaNav" class="area-nav"></div>
   </div>
+  <div class="account-area"><div id="accountMenu" class="account-menu" popover><div id="accountEmail" class="account-email"></div><div class="usage-title"><strong>Monthly usage</strong><span>%</span></div><div id="accountUsage" class="usage-number">—</div><progress id="accountProgress" max="100" value="0" aria-label="Monthly API usage"></progress><small id="accountRemaining">Loading usage…</small><small id="accountReset"></small><a id="adminLink" href="/admin/" hidden>Manage workspace ↗</a><button id="signOut">Sign out</button></div><button id="accountButton" class="account-button" aria-expanded="false" aria-controls="accountMenu"><span id="accountInitials" class="account-avatar">BQ</span><span><strong id="accountName">Your account</strong><small id="accountRole">Member</small></span><span>⌃</span></button></div>
   <div class="sidebar-bottom"><div class="local-dot"></div><div><strong>Local workspace</strong><small>Your source files stay here</small></div><button id="settingsButton" aria-label="AI settings">⚙</button></div>
 </aside>
 <div class="shell">
   <header><div class="breadcrumb">Workspace <span>/</span> <strong id="crumb">Project overview</strong></div><div class="header-actions"><span id="aiStatus" class="status">Local index</span><button id="uploadButton" class="primary">＋ New project</button><input type="file" accept="application/pdf,.pdf" id="fileInput" hidden></div></header>
   <main id="main"><div class="loading">Preparing your drawing directory…</div></main>
-  <footer><span>DRAWING ATLAS</span><span>Every drawing. In context.</span><a id="exportLink" href="#">Export directory ↗</a></footer>
+  <footer><span>BQ INTELLIGENCE</span><span>Every drawing. In context.</span><a id="exportLink" href="#">Export directory ↗</a></footer>
 </div>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <dialog id="viewer"><div class="viewer-bar"><div><span class="eyebrow" id="viewerCode"></span><h2 id="viewerTitle"></h2></div><button id="closeViewer" class="icon-button" aria-label="Close drawing">✕</button></div><div class="viewer-body"><section class="drawing-pane"><div class="viewer-tools"><button id="previousPage" aria-label="Previous page">←</button><span id="pageLabel"></span><button id="nextPage" aria-label="Next page">→</button><span class="spacer"></span><button id="zoomOut" aria-label="Zoom out">−</button><button id="zoomReset">Fit</button><button id="zoomIn" aria-label="Zoom in">＋</button><a id="sourceLink" target="_blank" rel="noopener">Original PDF ↗</a></div><div id="drawingScroll"><img id="drawingImage" alt="Source tender drawing"></div></section><aside id="drawingDetails"></aside></div></dialog>

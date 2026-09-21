@@ -4,3 +4,6 @@ data/
 tmp/
 __pycache__/
 .pytest_cache/
+node_modules/
+bq-admin/dist/
+*.tsbuildinfo

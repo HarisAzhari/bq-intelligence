@@ -1,3 +1,5 @@
+> **Accounts & admin:** BQ Intelligence now requires email/password sign-in. Build the separate `bq-admin` project before starting the backend. See [BQ Admin setup](bq-admin/README.md) for accounts, monthly USD budgets, and migration notes.
+
 # Drawing Atlas — upload-first AI directory
 
 ## Tender summary: three-document questions

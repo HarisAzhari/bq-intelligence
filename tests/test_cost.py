@@ -62,6 +62,10 @@ class IndexTests(unittest.TestCase):
 
 class ApiTests(unittest.TestCase):
     def setUp(self):
+        auth = patch.object(main.accounts, 'identity', return_value={'id':'fixture-user','role':'user'})
+        auth.start(); self.addCleanup(auth.stop)
+        ownership = patch.object(main.accounts, 'can_access_project', return_value=True)
+        ownership.start(); self.addCleanup(ownership.stop)
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name); self.pid = 'aabbccddeeff'; self.folder = self.root/self.pid
         self.folder.mkdir()
@@ -170,7 +174,7 @@ class AssemblyTests(unittest.TestCase):
                                      cost_refs=[dict(page=1, code='FF-06', title='Floor tile', quote='Rate'),
                                                 dict(page=44, quote='off the end')]))
             response = {'choices': [{'message': {'content': answer}, 'finish_reason': 'stop'}], 'usage': {}}
-            with patch.object(chat, 'render_inputs', return_value=[]), patch.object(chat.httpx, 'post') as request:
+            with patch.object(chat, 'render_inputs', return_value=[]), patch.object(chat.metering, 'post') as request:
                 request.return_value.json.return_value = response
                 result = chat.ask_sheet(path, 1, 'FF-06', chat.Question(question='rate?'), 'offline', 'test',
                                         cost=dict(selected, path=str(path)))

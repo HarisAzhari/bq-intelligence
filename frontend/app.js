@@ -3,7 +3,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;',
 let project, config, route='overview', area=null, query='', level='', discipline='', viewType='', stageValue='', currentPage=1, zoom=100, projects=[];
 let toastTimer;
 function toast(text){$('#toast').textContent=text;$('#toast').classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').classList.remove('show'),7000)}
-async function api(path,options={}){const r=await fetch(path,options);if(!r.ok){let e;try{e=await r.json()}catch{e={detail:r.statusText}}throw Error(typeof e.detail==='string'?e.detail:JSON.stringify(e.detail))}return r.status===204?null:r.json()}
+async function api(path,options={}){const r=await fetch(path,options);if(r.status===401){location.href='/login.html';throw Error('Session expired. Please sign in.')}if(!r.ok){let e;try{e=await r.json()}catch{e={detail:r.statusText}}throw Error(typeof e.detail==='string'?e.detail:JSON.stringify(e.detail))}return r.status===204?null:r.json()}
 const base=()=>`/api/projects/${project.id}`;
 const imageUrl=(p,w=600)=>`${base()}/pages/${p}/image?width=${w}`;
 const linked=(s,id)=>s.areas.some(a=>a.area===id);
